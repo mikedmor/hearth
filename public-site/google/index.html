@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Back to Hearth…</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Taking you back to Hearth…</h1>
+      <p id="text" class="muted">One moment.</p>
+      <noscript><p>This page needs JavaScript to send you back home to Hearth.</p></noscript>
+    </main>
+    <script>
+      // Google sends the browser here after "Sign in with Google" in Hearth, with
+      // ?code=…&state=…. Hearth put the home address it was opened at into the state
+      // ("<random>.<base64url address>"). This page sends the browser there, to /calendar, with
+      // the same query; Hearth finishes the sign-in. Nothing is stored or sent anywhere else.
+      //
+      // It only goes to addresses on a home network, so it can't be used to send someone to
+      // another website. If your Hearth is at a public-looking name (split DNS), add it here:
+      const ALSO_ALLOWED = [];
+
+      (() => {
+        const title = document.getElementById("title");
+        const text = document.getElementById("text");
+        const stop = (t, m) => {
+          title.textContent = t;
+          text.textContent = m;
+        };
+        const query = new URLSearchParams(location.search);
+        const state = query.get("state") || "";
+        if (!state || !(query.get("code") || query.get("error"))) {
+          stop(
+            "Hearth's return page",
+            "Google sends you here after you sign in from Hearth, and this page takes you home. There's nothing to do here on its own.",
+          );
+          return;
+        }
+        let home;
+        try {
+          const b64 = state.split(".")[1] || "";
+          const text = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+          home = new URL(text);
+        } catch (_e) {
+          home = null;
+        }
+        const host = home ? home.hostname.toLowerCase().replace(/^\[|\]$/g, "") : "";
+        const homeNetwork =
+          host === "localhost" ||
+          !host.includes(".") ||
+          /\.(home|local|lan|internal|localhost|test|home\.arpa)$/.test(host) ||
+          /^127\./.test(host) ||
+          /^10\./.test(host) ||
+          /^192\.168\./.test(host) ||
+          /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+          /^169\.254\./.test(host) ||
+          host === "::1" ||
+          /^f[cd][0-9a-f]{2}:/.test(host) ||
+          ALSO_ALLOWED.includes(host);
+        if (
+          !home ||
+          (home.protocol !== "https:" && home.protocol !== "http:") ||
+          home.pathname !== "/" ||
+          !homeNetwork
+        ) {
+          stop(
+            "That doesn't lead home",
+            "This page only sends you back to Hearth on a home network. Start again from Hearth's Calendar page.",
+          );
+          return;
+        }
+        location.replace(`${home.origin}/calendar${location.search}`);
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+# Hearth in its own folder, built from source. See guides/install.md.
+#
+#   mkdir -p hearth/data && cd hearth
+#   git clone https://github.com/mikedmor/hearth.git src
+#   cp src/docker/compose.yaml .
+#   umask 077; printf "HEARTH_SECRET_KEY=%s\n" "$(openssl rand -base64 32)" > .env
+#   docker compose up -d --build
+#
+# Only Hearth's container is built and started; nothing else on the machine is touched.
+services:
+  hearth:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+    image: hearth:local
+    container_name: hearth
+    restart: unless-stopped
+    # Must own ./data on the host. Run `id` to see yours (Synology's first user is often 1026:100).
+    user: "1000:1000"
+    ports:
+      - "8082:8082"
+    environment:
+      TZ: America/New_York # your time zone
+      # Encrypts widget keys, AI keys and calendar sign-ins. Keep a copy somewhere safe.
+      HEARTH_SECRET_KEY: ${HEARTH_SECRET_KEY:?set HEARTH_SECRET_KEY in .env next to this file}
+      # If your home has its own certificate authority, let Hearth trust it, so status checks
+      # and widgets can reach https:// services that use it (and mount the root below).
+      # NODE_EXTRA_CA_CERTS: /certs/root_ca.crt
+    volumes:
+      - ./data:/data
+      # The public root certificate only, read-only. Never a private key.
+      # - /path/to/root_ca.crt:/certs/root_ca.crt:ro

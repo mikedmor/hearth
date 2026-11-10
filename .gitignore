@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local data: a household's real config, secrets, calendars and backups. Never commit it.
+data/
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Maintainers' private design docs (vision, roadmap, features, decisions, architecture, the
+# home's own network notes). Public documentation lives in guides/.
+docs/
+
+# AI agent instructions (private, like docs/)
+CLAUDE.md
+CLAUDE.local.md

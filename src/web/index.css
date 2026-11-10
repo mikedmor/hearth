@@ -1,0 +1,591 @@
+@import "tailwindcss";
+
+/*
+ * Colours come from the look (lib/look.ts sets --c-* on <html>, or on a preview panel), so every
+ * Tailwind colour here follows the theme. "dark:" follows the nearest data-mode, not the device.
+ */
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+@theme inline {
+  --color-page: var(--c-background);
+  --color-surface: var(--c-surface);
+  --color-line: var(--c-border);
+  --color-ink: var(--c-text);
+  --color-muted: var(--c-muted);
+  --color-accent: var(--c-accent);
+  --color-good: var(--c-positive);
+  --color-bad: var(--c-negative);
+  --color-warn: var(--c-warning);
+  --color-chart1: var(--c-chart1);
+  --color-chart2: var(--c-chart2);
+  --color-chart3: var(--c-chart3);
+  --color-chart4: var(--c-chart4);
+  --color-chart5: var(--c-chart5);
+  --color-chart6: var(--c-chart6);
+  --font-sans: var(--font);
+  --font-heading: var(--font-heading);
+  --radius-card: var(--radius);
+}
+
+:root {
+  --radius: 18px;
+  --glow: 0.6;
+  --gap: 12px;
+  --tile-pad: 14px;
+  --font:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto,
+    sans-serif;
+  --font-heading: var(--font);
+  /* Mixed from the theme: soft fills and strong lines. */
+  --c-surface-2: color-mix(in oklab, var(--c-surface) 82%, var(--c-text));
+  --c-line-strong: color-mix(in oklab, var(--c-border) 60%, var(--c-text));
+  --c-accent-soft: color-mix(in oklab, var(--c-accent) 16%, transparent);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 10px 28px -16px rgb(0 0 0 / 0.35);
+  --shadow-hover: 0 2px 6px rgb(0 0 0 / 0.08), 0 22px 44px -18px rgb(0 0 0 / 0.45);
+}
+
+[data-mode="light"] {
+  color-scheme: light;
+}
+[data-mode="dark"] {
+  color-scheme: dark;
+  --shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 30px -18px rgb(0 0 0 / 0.85);
+  --shadow-hover: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 22px 44px -18px rgb(0 0 0 / 0.95);
+}
+
+[data-density="compact"] {
+  --gap: 8px;
+  --tile-pad: 10px;
+}
+[data-density="roomy"] {
+  --gap: 18px;
+  --tile-pad: 18px;
+}
+
+html {
+  background: var(--c-background);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: var(--font);
+  color: var(--c-text);
+  background: var(--c-background);
+  -webkit-font-smoothing: antialiased;
+}
+
+option,
+optgroup {
+  background: var(--c-surface);
+  color: var(--c-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+/* ------------------------------------------------------------------ Backdrops */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--c-background);
+}
+[data-bg="glow"] .backdrop {
+  background:
+    radial-gradient(
+      900px 520px at 12% -180px,
+      color-mix(in oklab, var(--c-accent) calc(var(--glow) * 34%), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      700px 420px at 92% -140px,
+      color-mix(in oklab, var(--c-chart2) calc(var(--glow) * 20%), transparent),
+      transparent 70%
+    ),
+    var(--c-background);
+}
+[data-bg="gradient"] .backdrop {
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--c-accent) calc(var(--glow) * 22%), var(--c-background)) 0%,
+    var(--c-background) 55%,
+    color-mix(in oklab, var(--c-chart2) calc(var(--glow) * 18%), var(--c-background)) 100%
+  );
+}
+[data-bg="aurora"] .backdrop {
+  background:
+    radial-gradient(
+      60% 50% at 20% 10%,
+      color-mix(in oklab, var(--c-accent) calc(var(--glow) * 40%), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      50% 45% at 85% 20%,
+      color-mix(in oklab, var(--c-chart4) calc(var(--glow) * 35%), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      55% 50% at 60% 90%,
+      color-mix(in oklab, var(--c-chart2) calc(var(--glow) * 30%), transparent),
+      transparent 70%
+    ),
+    var(--c-background);
+  animation: aurora 30s ease-in-out infinite alternate;
+  background-size: 140% 140%;
+}
+@keyframes aurora {
+  to {
+    background-position: 30% 20%;
+  }
+}
+[data-bg="image"] .backdrop {
+  background:
+    var(--bg-image) center / cover no-repeat,
+    var(--c-background);
+  filter: blur(var(--bg-blur));
+  inset: calc(var(--bg-blur) * -2);
+}
+[data-bg="image"] .backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklab, var(--c-background) calc(var(--bg-dim) * 100%), transparent);
+}
+
+/* ------------------------------------------------------------------ Page width */
+
+.shell {
+  width: 100%;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  max-width: 1180px;
+}
+[data-width="narrow"] .shell {
+  max-width: 860px;
+}
+[data-width="wide"] .shell {
+  max-width: 1480px;
+}
+[data-width="full"] .shell {
+  max-width: none;
+}
+@media (min-width: 760px) {
+  .shell {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+}
+[data-align="center"] .hero {
+  text-align: center;
+  justify-content: center;
+}
+
+/* ------------------------------------------------------------------ Cards and tiles */
+
+.card {
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow);
+}
+[data-tile="glass"] .card {
+  background: color-mix(in oklab, var(--c-surface) 62%, transparent);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+}
+[data-tile="flat"] .card {
+  box-shadow: none;
+  border-color: transparent;
+  background: color-mix(in oklab, var(--c-surface) 92%, var(--c-text));
+}
+[data-tile="outline"] .card {
+  background: transparent;
+  box-shadow: none;
+  border-color: var(--c-line-strong);
+}
+[data-tile="minimal"] .card {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+}
+@media (min-width: 640px) {
+  .tiles {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
+  [data-tile-size="sm"] .tiles {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+  [data-tile-size="lg"] .tiles {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+}
+
+.tile {
+  --tile: var(--c-accent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 112px;
+  padding: var(--tile-pad);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 0.18s,
+    box-shadow 0.18s,
+    background 0.18s;
+  -webkit-tap-highlight-color: transparent;
+}
+[data-tile-size="sm"] .tile {
+  min-height: 92px;
+  gap: 8px;
+}
+[data-tile-size="lg"] .tile {
+  min-height: 138px;
+}
+[data-tile="minimal"] .tile {
+  align-items: center;
+  text-align: center;
+}
+.tile:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--tile) 45%, transparent);
+  box-shadow:
+    var(--shadow-hover),
+    0 10px 30px -20px var(--tile);
+}
+.tile:active {
+  transform: scale(0.985);
+}
+.tile.is-first {
+  border-color: color-mix(in oklab, var(--c-accent) 60%, transparent);
+  box-shadow:
+    0 0 0 3px var(--c-accent-soft),
+    var(--shadow);
+}
+
+.tile-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: calc(var(--radius) * 0.72);
+  font-size: 24px;
+  line-height: 1;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--tile) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tile) 25%, transparent);
+}
+[data-tile-size="sm"] .tile-icon {
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+}
+[data-tile-size="lg"] .tile-icon {
+  width: 56px;
+  height: 56px;
+  font-size: 32px;
+}
+[data-icon="solid"] .tile-icon {
+  background: var(--tile);
+  box-shadow: 0 6px 16px -8px var(--tile);
+  color: #fff;
+}
+[data-icon="plain"] .tile-icon {
+  background: transparent;
+  box-shadow: none;
+}
+[data-icon="circle"] .tile-icon {
+  border-radius: 999px;
+}
+.tile-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 5px;
+}
+.tile-icon.mono {
+  font-size: 16px;
+  font-weight: 750;
+  color: color-mix(in oklab, var(--tile) 80%, var(--c-text));
+}
+[data-icon="solid"] .tile-icon.mono {
+  color: #fff;
+}
+
+[data-descriptions="false"] .tile-desc {
+  display: none;
+}
+
+.dot {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c-muted);
+  opacity: 0.6;
+}
+.dot-up {
+  opacity: 1;
+  background: var(--c-positive);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-positive) 22%, transparent);
+}
+.dot-slow {
+  opacity: 1;
+  background: var(--c-warning);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-warning) 22%, transparent);
+}
+.dot-down {
+  opacity: 1;
+  background: var(--c-negative);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-negative) 26%, transparent);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in oklab, var(--c-negative) 0%, transparent);
+  }
+}
+
+/* ------------------------------------------------------------------ Widgets grid */
+
+.widget-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--gap);
+}
+.widget-grid > * {
+  grid-column: span 12;
+  min-width: 0;
+}
+@media (min-width: 720px) {
+  .widget-grid > [data-w="3"] {
+    grid-column: span 6;
+  }
+  .widget-grid > [data-w="4"] {
+    grid-column: span 6;
+  }
+  .widget-grid > [data-w="6"] {
+    grid-column: span 6;
+  }
+  .widget-grid > [data-w="8"] {
+    grid-column: span 12;
+  }
+}
+@media (min-width: 1060px) {
+  .widget-grid > [data-w="3"] {
+    grid-column: span 3;
+  }
+  .widget-grid > [data-w="4"] {
+    grid-column: span 4;
+  }
+  .widget-grid > [data-w="8"] {
+    grid-column: span 8;
+  }
+}
+
+/* Blocks inside a custom widget: their own 12-column grid. */
+.block-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+.block-grid > * {
+  min-width: 0;
+}
+/* A widget's blocks stack when its own card is narrow (a side rail, a phone), not just the screen. */
+.widget-card {
+  container-type: inline-size;
+}
+@container (max-width: 420px) {
+  .block-grid > * {
+    grid-column: span 12 !important;
+  }
+}
+
+.skeleton {
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--c-surface), var(--c-surface-2), var(--c-surface));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ Command center */
+
+/* The page fits the window: the strip on top, the launcher and widget rail below it. */
+.command {
+  height: calc(100dvh - 64px);
+}
+.cmd-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-strong) transparent;
+}
+
+/* Groups pack into as many columns as fit, so a long list of services needs no scrolling. */
+.launcher-columns {
+  columns: 230px;
+  column-gap: var(--gap);
+}
+.launcher-columns.wide-cols {
+  columns: 320px;
+}
+.launcher-columns > .launcher-group {
+  break-inside: avoid;
+  display: inline-block;
+  width: 100%;
+}
+
+/* One-line rows: small icons. */
+.row-icon .tile-icon {
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  border-radius: calc(var(--radius) * 0.45);
+}
+.row-icon .tile-icon.mono {
+  font-size: 11px;
+}
+[data-density="compact"] .row-link {
+  height: 34px;
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 2px;
+}
+@media (max-width: 959px) {
+  .icon-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.icon-grid .tile-icon,
+.dock-item .tile-icon {
+  width: 52px;
+  height: 52px;
+  font-size: 28px;
+  border-radius: calc(var(--radius) * 0.8);
+}
+
+/* Phone pages: swipe between Apps and Widgets. */
+.pager {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  gap: 16px;
+}
+.pager::-webkit-scrollbar {
+  display: none;
+}
+.pager-page {
+  flex: 0 0 100%;
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/* The command center uses more of a big screen than the classic page. */
+.shell.command {
+  max-width: 1680px;
+}
+[data-width="narrow"] .shell.command {
+  max-width: 1240px;
+}
+[data-width="wide"] .shell.command {
+  max-width: 2100px;
+}
+[data-width="full"] .shell.command {
+  max-width: none;
+}
+.dock-bar .tile-icon {
+  width: 44px;
+  height: 44px;
+  font-size: 24px;
+}
+
+/* Status dots in the launcher: in line with a row's name, or on an icon's corner. */
+.dot.dot-inline {
+  position: static;
+  flex: none;
+}
+.dot.dot-corner {
+  top: -3px;
+  right: -3px;
+  box-shadow: 0 0 0 2px var(--c-surface);
+}
+/* The top bar lines up with the command center's wider page. */
+.shell.command-head {
+  max-width: 1680px;
+}
+[data-width="narrow"] .shell.command-head {
+  max-width: 1240px;
+}
+[data-width="wide"] .shell.command-head {
+  max-width: 2100px;
+}
+[data-width="full"] .shell.command-head {
+  max-width: none;
+}
+
+/* Library icons: an app's logo or a symbol, drawn in the tile's colour (white on a solid icon). */
+.tile-icon.lib {
+  color: color-mix(in oklab, var(--tile) 82%, var(--c-text));
+}
+[data-icon="solid"] .tile-icon.lib {
+  color: #fff;
+}
+.lib-svg {
+  width: 56%;
+  height: 56%;
+}

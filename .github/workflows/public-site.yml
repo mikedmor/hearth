@@ -1,0 +1,34 @@
+# Publishes public-site/ (and only that folder) to GitHub Pages: the home page, privacy policy
+# and return page Google needs for two-way Google Calendar (D-18). The rest of the repo stays
+# private. Pages for a private repo needs a paid GitHub plan.
+name: Public site
+
+on:
+  push:
+    branches: [main]
+    paths: ["public-site/**", ".github/workflows/public-site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public-site
+      - id: deployment
+        uses: actions/deploy-pages@v4

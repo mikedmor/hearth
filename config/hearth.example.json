@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "settings": {
+    "title": "Hearth",
+    "guest": {
+      "layout": {
+        "widgets": [
+          { "id": "welcome", "w": 8 },
+          { "id": "services", "w": 4 },
+          { "id": "clock", "w": 4 }
+        ]
+      }
+    }
+  },
+  "groups": [{ "id": "home", "name": "Home" }],
+  "tiles": [],
+  "widgets": [
+    {
+      "id": "welcome",
+      "type": "note",
+      "title": "Welcome",
+      "options": {
+        "text": "Welcome to Hearth. Sign in as the admin (the key at the top; the setup code is in Hearth's log), then press Edit. Add your services one by one, or let Hearth find them on your network.",
+        "tone": "celebrate"
+      }
+    },
+    { "id": "services", "type": "status", "title": "Services" },
+    { "id": "clock", "type": "clock", "title": "Clock", "options": { "zones": [] } },
+    { "id": "ask", "type": "ask", "title": "Ask", "audience": "adults" },
+    { "id": "ai-servers", "type": "ai", "title": "AI computers", "audience": "adults" }
+  ],
+  "profiles": []
+}
