@@ -25,12 +25,13 @@ import {
   FROM,
   GOOGLE_CLIENT_SECRET,
   type HearthEvent,
+  type ImportSummary,
   type RemoteCalendar,
   type Repeat,
   secretOf,
   toMs,
 } from "../../shared/calendar";
-import type { Profile, Settings } from "../../shared/config";
+import { isLocked, type Profile, type Settings } from "../../shared/config";
 import { guardedFetch, NetError, type NetPolicy } from "../net";
 import type { SecretStore } from "../secrets";
 import { CalDav, CalDavError, type DavObject, sameHref } from "./caldav";
@@ -47,11 +48,13 @@ import {
   startSignIn,
 } from "./google";
 import {
+  calendarIcs,
   eventIcs,
   IcsError,
   isZone,
   occurrences,
   parseCalendar,
+  readImport,
   utcToWall,
   wallToUtc,
 } from "./ics";
@@ -92,6 +95,7 @@ interface Raw {
   repeat?: Repeat;
   repeating: boolean;
   readOnlyReason?: string;
+  customRepeat?: boolean;
 }
 
 interface Cached<T> {
@@ -253,6 +257,7 @@ export class CalendarService {
       notes: r.notes,
       repeat: r.repeat,
       repeating: r.repeating,
+      customRepeat: r.customRepeat,
       people: tagsOf(c.id, r.series),
       canEdit: canWrite(c, me) && c.kind !== "ics" && !r.readOnlyReason,
       readOnlyReason: r.readOnlyReason,
@@ -298,7 +303,7 @@ export class CalendarService {
       google: Boolean(settings.googleClientId && this.deps.secrets.has(GOOGLE_CLIENT_SECRET)),
       googleReturns: Boolean(settings.googleReturnPage),
       internet: settings.allowInternet,
-      locked: person.locked,
+      locked: isLocked(person),
       noPin: !hasPin,
     };
   }
@@ -361,9 +366,10 @@ export class CalendarService {
         location: e.location,
         notes: e.notes,
         repeat: e.repeat,
-        repeating: Boolean(e.repeat),
+        repeating: Boolean(e.repeat || e.rrule),
+        customRepeat: e.rrule ? true : undefined,
       };
-      if (!e.repeat) {
+      if (!e.repeat && !e.rrule) {
         out.push({ ...base, start: e.start, end: e.end });
         continue;
       }
@@ -641,7 +647,7 @@ export class CalendarService {
     if (c.kind === "hearth") {
       const old = this.file.events.find((e) => e.id === at.ref && e.calendar === c.id);
       if (!old) throw new CalendarError("That event is gone. It may have been deleted.", 404);
-      if (old.repeat && at.scope === "one" && at.instance) {
+      if ((old.repeat || old.rrule) && at.scope === "one" && at.instance) {
         // Just this time: it becomes an event of its own, and the series skips it.
         const instance = at.instance;
         const id = newId(person.id);
@@ -657,8 +663,12 @@ export class CalendarService {
         await this.deps.store.update((f) => {
           const e = f.events.find((x) => x.id === old.id);
           if (!e) return;
+          // An imported event keeps its own repeat rule when asked ("every time", rule unchanged).
+          const keep = input.keepRule && !input.repeat && e.rrule ? e.rrule : undefined;
           Object.assign(e, hearthEvent(e.id, c.id, input, e.createdBy, this.now()), {
-            except: input.repeat ? e.except : [],
+            rrule: keep,
+            uid: e.uid,
+            except: input.repeat || keep ? e.except : [],
           });
         });
       }
@@ -712,7 +722,7 @@ export class CalendarService {
     if (c.kind === "hearth") {
       const e = this.file.events.find((x) => x.id === at.ref && x.calendar === c.id);
       if (!e) return;
-      if (e.repeat && at.scope === "one" && at.instance) {
+      if ((e.repeat || e.rrule) && at.scope === "one" && at.instance) {
         const instance = at.instance;
         whole = false;
         await this.deps.store.update((f) => {
@@ -782,7 +792,7 @@ export class CalendarService {
   }
 
   private unlocked(person: Profile) {
-    if (person.locked)
+    if (isLocked(person))
       throw new CalendarError("This page is locked. Ask the admin to add calendars.", 403);
   }
 
@@ -1081,6 +1091,137 @@ export class CalendarService {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Importing a file, and downloading a Hearth calendar
+
+  /**
+   * Bring a calendar file's events into one of this person's calendars: Hearth's own (kept here),
+   * or a CalDAV or Google calendar (sent there). With `dryRun`, only says what it would do.
+   * Importing the same file again adds nothing: events are known by the file's own ids.
+   */
+  async importIcs(
+    person: Profile,
+    b: {
+      calendar?: string;
+      newCalendar?: { name: string; color: string };
+      ics: string;
+      timeZone: string;
+      dryRun: boolean;
+    },
+  ): Promise<ImportSummary & { calendar?: string }> {
+    const file = readImport(b.ics, b.timeZone);
+    const summary: ImportSummary = {
+      events: file.events.filter((e) => !e.uid.includes("#")).length,
+      repeating: file.repeating,
+      changedTimes: file.changedTimes,
+      duplicates: 0,
+      added: 0,
+      first: file.first,
+      last: file.last,
+      notes: file.notes,
+    };
+    if (!file.events.length) throw new CalendarError("That file has no events in it.");
+
+    let target: Calendar | undefined;
+    if (b.calendar) target = this.calendarFor(person, b.calendar, true);
+    else if (!b.newCalendar) throw new CalendarError("Choose which calendar to import into.");
+    else this.unlocked(person);
+
+    if (!target || target.kind === "hearth") {
+      const known = new Set(
+        this.file.events
+          .filter((e) => target && e.calendar === target.id && e.uid)
+          .map((e) => e.uid),
+      );
+      const fresh = file.events.filter((e) => !known.has(e.uid));
+      summary.duplicates = file.events.length - fresh.length;
+      if (b.dryRun) return summary;
+      if (!target && b.newCalendar)
+        target = await this.createCalendar(person, {
+          kind: "hearth",
+          name: b.newCalendar.name,
+          color: b.newCalendar.color,
+          shareWith: [],
+          shareEdit: false,
+        });
+      const into = target as Calendar;
+      const now = new Date(this.now()).toISOString();
+      await this.deps.store.update((f) => {
+        for (const e of fresh)
+          f.events.push({
+            id: newId(person.id),
+            calendar: into.id,
+            title: e.title,
+            start: e.start,
+            end: e.end,
+            allDay: e.allDay,
+            timeZone: e.timeZone,
+            location: e.location,
+            notes: e.notes,
+            repeat: e.repeat,
+            rrule: e.rrule,
+            except: e.except,
+            uid: e.uid,
+            createdBy: person.id,
+            updated: now,
+          });
+      });
+      summary.added = fresh.length;
+      this.forgetCache(into.id);
+      return { ...summary, calendar: into.id };
+    }
+
+    if (target.kind === "ics")
+      throw new CalendarError(`${target.name} can't be changed from Hearth.`);
+    if (b.dryRun) return summary;
+    const account = this.accountOf(target);
+    let failed = 0;
+    let problem = "";
+    if (target.kind === "caldav") {
+      const dav = this.davClient(account);
+      for (const o of file.objects) {
+        try {
+          await dav.put(target.remote as string, o.ics, { uid: o.uid });
+          summary.added++;
+        } catch (e) {
+          if (e instanceof CalDavError && /changed that event elsewhere/.test(e.message))
+            summary.duplicates++;
+          else {
+            failed++;
+            problem ||= this.problem(e);
+          }
+        }
+      }
+      // The summary counts events; the server takes each with its moved times, as one.
+      summary.added = Math.min(summary.added, summary.events);
+    } else {
+      const g = this.googleAccount(account);
+      for (const e of file.events) {
+        try {
+          await g.importEvent(target.remote as string, e);
+          if (!e.uid.includes("#")) summary.added++;
+        } catch (err) {
+          failed++;
+          problem ||= this.problem(err);
+        }
+      }
+    }
+    this.forgetCache(target.id);
+    if (failed) summary.notes.push(`${failed} couldn't be added${problem ? `: ${problem}` : ""}.`);
+    return { ...summary, calendar: target.id };
+  }
+
+  /** A Hearth calendar as an .ics file, for anyone who may see it. */
+  exportIcs(person: Profile, id: string): { name: string; ics: string } {
+    const c = this.calendarFor(person, id, false);
+    if (c.kind !== "hearth")
+      throw new CalendarError(
+        `${c.name} lives in ${c.kind === "google" ? "Google" : "its own app"}; download it there.`,
+      );
+    const events = this.file.events.filter((e) => e.calendar === c.id);
+    return { name: c.name, ics: calendarIcs(c.name, events) };
+  }
+
   /** Someone's id changed in Settings: everything of theirs follows. */
   async renamePerson(from: string, to: string): Promise<void> {
     if (from === to) return;
@@ -1190,7 +1331,7 @@ export function expandHearth(e: HearthEvent, from: number, to: number) {
     "UID:x",
     `DTSTART${value}:${wall(e.start)}`,
     `DTEND${value}:${wall(e.end)}`,
-    `RRULE:FREQ=${FREQ[e.repeat as Repeat]}${until}`,
+    e.rrule ? `RRULE:${e.rrule}` : `RRULE:FREQ=${FREQ[e.repeat as Repeat]}${until}`,
     "SUMMARY:x",
     "END:VEVENT",
     "END:VCALENDAR",

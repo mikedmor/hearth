@@ -2,11 +2,27 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import {
+  type Access,
+  type AccessItem,
+  AUTH_KINDS,
+  accessId,
+  accessSecret,
+  type LinkSuggestion,
+} from "../shared/access";
 import type { ChatEvent, ChatMessage, DesignEvent, Session, StatusMap } from "../shared/api";
-import { APPS, type AppDef, fillTemplate, GENERAL_TEMPLATES } from "../shared/catalog";
+import {
+  APPS,
+  type AppDef,
+  authWays,
+  fillTemplate,
+  GENERAL_TEMPLATES,
+  throughAccess,
+} from "../shared/catalog";
 import {
   AiServerSchema,
   Audience,
@@ -14,6 +30,7 @@ import {
   type Group,
   GroupSchema,
   type HearthConfig,
+  isLocked,
   LayoutSchema,
   PAGE_PATHS,
   type Profile,
@@ -22,10 +39,12 @@ import {
   type Role,
   SettingsSchema,
   shortLinkOf,
+  statusFor,
   type Tile,
   TileSchema,
   type Viewer,
   visibleTo,
+  type Widget,
   WidgetSchema,
 } from "../shared/config";
 import { LookSchema, ThemeSchema } from "../shared/themes";
@@ -40,15 +59,41 @@ import { IcsError } from "./calendar/ics";
 import { calendarRoutes } from "./calendar/routes";
 import { CalendarError, type CalendarService } from "./calendar/service";
 import { CalendarFileError } from "./calendar/store";
+import { clientIp } from "./client-ip";
 import { ConfigError, type ConfigStore } from "./config-store";
+import { AdGuardError } from "./devices/adguard";
+import type { DeviceMonitor } from "./devices/monitor";
+import { deviceRoutes } from "./devices/routes";
+import { DeviceError, type DeviceService, newBrowserId } from "./devices/service";
+import { DevicesFileError } from "./devices/store";
 import { defaultTargets, parseTargets, recognise, scan, scanPorts } from "./discover";
 import { fetchFavicon } from "./favicon";
+import { type FileStation, FileStationError } from "./files/filestation";
+import { filesRoutes } from "./files/routes";
 import { appFor, type IconKind, iconColor, resolveIcon, searchIcons, suggestIcons } from "./icons";
+import { internetRoutes } from "./internet/routes";
+import { CAPTIVE } from "./internet/rules";
+import { InternetError, type InternetService } from "./internet/service";
+import { InternetFileError } from "./internet/store";
 import { parseCookies, sameSite } from "./live";
 import { checkTarget, NetError } from "./net";
 import { isPersonalSecret, type SecretStore } from "./secrets";
+import type { SmartHomeService } from "./smarthome/service";
+import { type Sso, SsoError } from "./sso";
+import { mobileconfig, type TrustStore } from "./trust";
+import { type Updates, updateRoutes } from "./updates";
 import { buildHomeView, canChat, findProfile, mayManage, visibleWidgets } from "./view";
+import {
+  appPaths,
+  HEARTH_DATA,
+  publicConnections,
+  readConnection,
+  signIn,
+} from "./widgets/connections";
 import type { WidgetHub } from "./widgets/runtime";
+
+/** A random id per browser, so Hearth can tell devices apart. Not a sign-in. */
+const DEVICE_COOKIE = "hearth_device";
 
 export interface AppDeps {
   config: ConfigStore;
@@ -58,12 +103,32 @@ export interface AppDeps {
   ai: AiMonitor;
   /** Everyone's calendars. */
   calendar?: CalendarService;
+  /** The devices on the network. */
+  devices?: DeviceService;
+  /** What runs on each device, who's online, AI machines, pinball tables, alerts. */
+  monitor?: DeviceMonitor;
+  /** The smart-home hubs (openHAB, Home Assistant). */
+  smart?: SmartHomeService;
+  /** The NAS's shared folders, as each person (Files). */
+  files?: FileStation;
+  /** The update check (GitHub releases). */
+  updates?: Updates;
+  /** The names (with port) people's browsers use to reach Hearth, filled as its page loads. */
+  ownHosts?: Set<string>;
+  /** The internet controls. */
+  internet?: InternetService;
+  /** The home's root certificate (public half), for the trust page. */
+  trust?: TrustStore;
+  /** Single sign-on through the home's identity provider. */
+  sso?: Sso;
+  /** Network access for AdGuard Home in tests. */
+  fetch?: typeof fetch;
   status: () => StatusMap;
   dataDir: string;
   /** Built page (dist/web). Missing in dev, where Vite serves the page. */
   webDir?: string;
   /** A config change happened: tell open pages. */
-  onChange?: (what: "config" | "session" | "calendar") => void;
+  onChange?: (what: "config" | "session" | "calendar" | "internet") => void;
   /** The admin's own catalog entries (data/catalog/*.json). */
   extraApps?: () => AppDef[];
   /** The secret key lives in the data folder (no HEARTH_SECRET_KEY). */
@@ -165,6 +230,20 @@ export function createApp(deps: AppDeps): Hono {
       session: { needsSetup: deps.auth.needsSetup, admin, profile: profile?.id ?? null },
     };
   };
+  /** Where a request comes from: the device's address, and this browser's device cookie. */
+  const whereFrom = (c: Context): { ip?: string; browser?: string } => {
+    let peer: string | undefined;
+    try {
+      peer = getConnInfo(c).remote.address;
+    } catch {
+      // No socket (tests): nothing to go on.
+    }
+    const browser = parseCookies(c.req.header("cookie"))[DEVICE_COOKIE];
+    return {
+      ip: clientIp(peer, c.req.header("x-forwarded-for"), cfg().settings.network.trustedProxies),
+      browser: browser && /^[0-9a-f]{24}$/.test(browser) ? browser : undefined,
+    };
+  };
   const requireAdmin = (c: Context): Who => {
     const w = who(c);
     if (!w.admin)
@@ -188,7 +267,8 @@ export function createApp(deps: AppDeps): Hono {
     c.header("Set-Cookie", `${name}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`, {
       append: true,
     });
-  const changed = (what: "config" | "session" | "calendar" = "config") => deps.onChange?.(what);
+  const changed = (what: "config" | "session" | "calendar" | "internet" = "config") =>
+    deps.onChange?.(what);
   const body = async <T>(c: Context, schema: z.ZodType<T>): Promise<T> => {
     let raw: unknown;
     try {
@@ -230,6 +310,40 @@ export function createApp(deps: AppDeps): Hono {
       c.header("Content-Security-Policy", CSP);
   });
 
+  // The phones' and computers' "is there internet?" checks. A device stopped at the front door is
+  // sent to the welcome page (its "Sign in to network" sheet opens); any other gets the answer
+  // its system expects. They arrive by the check's own name or by these paths.
+  const CAPTIVE_PATHS: Record<string, { status: 200 | 204; body?: string }> = {
+    "/hotspot-detect.html": {
+      status: 200,
+      body: "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>",
+    },
+    "/library/test/success.html": {
+      status: 200,
+      body: "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>",
+    },
+    "/generate_204": { status: 204 },
+    "/gen_204": { status: 204 },
+    "/connecttest.txt": { status: 200, body: "Microsoft Connect Test" },
+    "/ncsi.txt": { status: 200, body: "Microsoft NCSI" },
+    "/success.txt": { status: 200, body: "success\n" },
+    "/canonical.html": { status: 200, body: "<meta http-equiv='refresh' content='0'>" },
+    "/check_network_status.txt": { status: 200, body: "NetworkManager is online\n" },
+  };
+  app.use("*", async (c, next) => {
+    const host = (c.req.header("host") ?? "").replace(/:\d+$/, "").toLowerCase();
+    const known = CAPTIVE_PATHS[c.req.path];
+    if (!deps.internet || c.req.method !== "GET" || (!known && !CAPTIVE.includes(host)))
+      return next();
+    c.header("Cache-Control", "no-store");
+    const { redirect } = deps.internet.captive(whereFrom(c).ip);
+    if (redirect) return c.redirect(redirect, 302);
+    if (!known) return next();
+    return known.status === 204
+      ? c.body(null, 204)
+      : c.body(known.body ?? "", 200, { "content-type": "text/html; charset=utf-8" });
+  });
+
   app.onError((err, c) => {
     if (err instanceof HttpError)
       return c.json({ error: err.message, issues: err.issues }, err.status);
@@ -237,6 +351,24 @@ export function createApp(deps: AppDeps): Hono {
     if (err instanceof ConfigError)
       return c.json({ error: "That would break the config.", issues: err.issues }, 400);
     if (err instanceof CalendarError) return c.json({ error: err.message }, err.status);
+    if (err instanceof DeviceError) return c.json({ error: err.message }, err.status);
+    if (err instanceof InternetError) return c.json({ error: err.message }, err.status);
+    if (err instanceof SsoError) return c.json({ error: err.message }, 400);
+    if (err instanceof FileStationError)
+      return c.json(
+        {
+          error: deps.secrets.redact(err.message),
+          needsSignIn: err.needsSignIn,
+          needsCode: err.needsCode,
+        },
+        err.status,
+      );
+    if (err instanceof InternetFileError)
+      return c.json({ error: err.message, issues: err.issues }, 400);
+    if (err instanceof DevicesFileError)
+      return c.json({ error: err.message, issues: err.issues }, 400);
+    if (err instanceof AdGuardError)
+      return c.json({ error: deps.secrets.redact(err.message) }, 400);
     if (err instanceof CalendarFileError)
       return c.json({ error: err.message, issues: err.issues }, 400);
     // A calendar elsewhere said no, or couldn't be reached: say why, without any secret in it.
@@ -301,21 +433,248 @@ export function createApp(deps: AppDeps): Hono {
   // ---------------------------------------------------------------------------
   // The page
 
-  app.get("/api/home", (c) => {
+  app.get("/api/home", async (c) => {
     const w = who(c);
     c.header("Cache-Control", "no-store");
-    return c.json(
-      buildHomeView(cfg(), {
+    let trustKnown: boolean | undefined;
+    // The names Hearth is reached by (start.home, an address and port): its own pages aren't
+    // services on the device it runs on.
+    const host = c.req.header("x-forwarded-host") ?? c.req.header("host");
+    if (deps.ownHosts && host && /^[\w.-]+(:\d+)?$/.test(host) && deps.ownHosts.size < 20)
+      deps.ownHosts.add(host.toLowerCase());
+    // Remember this browser, so its device can be told apart even when its address changes.
+    if (deps.devices) {
+      const here = whereFrom(c);
+      let browser = here.browser;
+      if (!browser) {
+        browser = newBrowserId();
+        setCookie(c, DEVICE_COOKIE, browser, 400);
+      }
+      trustKnown = deps.devices.trustKnown(browser);
+      if (here.ip)
+        void deps.devices
+          .see({
+            browser,
+            ip: here.ip,
+            profile: w.profile?.id,
+            agent: c.req.header("user-agent")?.slice(0, 200),
+          })
+          .catch(() => {});
+    }
+    return c.json({
+      ...buildHomeView(cfg(), {
         profile: w.profile,
         session: w.session,
         hasPin: (id) => deps.auth.hasPin(id),
       }),
-    );
+      family: deps.internet?.isParent(w) ?? false,
+      update: w.session.admin ? deps.updates?.status().available?.version : undefined,
+      deviceOwner: ownerHere(c),
+      familyPending: deps.internet?.isParent(w)
+        ? deps.internet.pending().length + deps.internet.doorVisitors().length
+        : undefined,
+      trustKnown,
+      build: await pageBuild(),
+    });
   });
+
+  /** The page's script as built ("index-AbC123.js"), read once: tabs compare theirs to it. */
+  let builtName: string | undefined | null = null;
+  const pageBuild = async (): Promise<string | undefined> => {
+    if (builtName !== null) return builtName;
+    const file = deps.webDir ? await readSafe(deps.webDir, "index.html") : null;
+    builtName = file
+      ? /\/assets\/(index-[\w-]+\.js)/.exec(new TextDecoder().decode(file.body))?.[1]
+      : undefined;
+    return builtName;
+  };
+
+  // ---------------------------------------------------------------------------
+  // Single sign-on
+
+  /** Whose device this request comes from, if it's saved as someone's (and they're still here). */
+  const ownerHere = (c: Context): string | undefined => {
+    const here = whereFrom(c);
+    const d = deps.devices
+      ?.devices()
+      .find(
+        (x) =>
+          x.treatment === "person" &&
+          ((here.browser && x.browsers.includes(here.browser)) ||
+            (here.ip && x.ips.includes(here.ip))),
+      );
+    return d?.person && findProfile(cfg(), d.person) ? d.person : undefined;
+  };
+
+  /** The address the provider sends people back to: this site, as the browser sees it. */
+  const callbackUrl = (c: Context) => {
+    const proto =
+      c.req.header("x-forwarded-proto") ?? (c.req.url.startsWith("https:") ? "https" : "http");
+    const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? "start.home";
+    return `${proto}://${host}/api/sso/callback`;
+  };
+
+  app.get("/api/sso", (c) =>
+    c.json({ enabled: Boolean(deps.sso?.enabled), label: cfg().settings.sso.label }),
+  );
+
+  /** Off to the provider: to sign in, or to link an account to a profile. */
+  app.get("/api/sso/start", async (c) => {
+    if (!deps.sso?.enabled) return c.redirect("/?sso=off", 302);
+    const intent = c.req.query("intent") === "link" ? "link" : "signin";
+    const profile = c.req.query("profile")?.slice(0, 40);
+    if (intent === "link") {
+      const w = who(c);
+      // The admin links anyone; a person links their own page.
+      if (!profile || !findProfile(cfg(), profile) || (!w.admin && w.profile?.id !== profile))
+        throw new HttpError(403, "Open that person's page (or sign in as the admin) to link it.");
+    }
+    try {
+      const url = await deps.sso.start({
+        redirectUri: callbackUrl(c),
+        intent,
+        profile,
+        returnTo: c.req.query("returnTo"),
+      });
+      return c.redirect(url, 302);
+    } catch (e) {
+      const why = e instanceof SsoError ? e.message : "Couldn't start signing in.";
+      return c.redirect(`/?sso=error&why=${encodeURIComponent(why)}`, 302);
+    }
+  });
+
+  /** Back from the provider. */
+  app.get("/api/sso/callback", async (c) => {
+    const back = (q: string, to = "/") =>
+      c.redirect(`${to}${to.includes("?") ? "&" : "?"}${q}`, 302);
+    if (!deps.sso) return back("sso=off");
+    if (c.req.query("error")) return back("sso=cancelled");
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    if (!code || !state) return back("sso=error");
+    try {
+      const r = await deps.sso.finish(state, code);
+      const label = r.claims.email ?? r.claims.preferred_username ?? r.claims.name;
+      if (r.intent === "link" && r.profile) {
+        await deps.auth.link(r.claims.sub, r.profile, label);
+        changed("session");
+        return back("sso=linked", r.returnTo);
+      }
+      const s = cfg().settings.sso;
+      const admin = Boolean(s.adminGroup && r.claims.groups.includes(s.adminGroup));
+      const profile = deps.auth.linkedProfile(r.claims.sub);
+      const found = profile ? findProfile(cfg(), profile) : null;
+      if (admin) setCookie(c, ADMIN_COOKIE, deps.auth.adminCookieFor(), 30);
+      if (found) setCookie(c, PROFILE_COOKIE, deps.auth.profileCookieFor(found.id), 365);
+      if (!found && !admin) return back(`sso=unlinked&who=${encodeURIComponent(label ?? "")}`);
+      changed("session");
+      return back(found ? "sso=ok" : "sso=admin", r.returnTo);
+    } catch (e) {
+      const why =
+        e instanceof SsoError || e instanceof AuthError ? e.message : "Signing in didn't work.";
+      return back(`sso=error&why=${encodeURIComponent(why)}`);
+    }
+  });
+
+  app.get("/api/admin/sso", (c) => {
+    requireAdmin(c);
+    const s = cfg().settings.sso;
+    return c.json({
+      issuer: s.issuer,
+      clientId: s.clientId,
+      label: s.label,
+      adminGroup: s.adminGroup,
+      secretSaved: deps.secrets.has("sso:client-secret"),
+      links: deps.auth.links().map(({ profile, label }) => ({ profile, label })),
+    });
+  });
+
+  app.put("/api/admin/sso", async (c) => {
+    requireAdmin(c);
+    const b = await body(
+      c,
+      z.object({
+        issuer: z.string().trim().max(300).optional(),
+        clientId: z.string().trim().max(200).optional(),
+        label: z.string().trim().min(1).max(40).optional(),
+        adminGroup: z.string().trim().max(100).optional(),
+        /** A new secret; null removes it; left out keeps it. */
+        clientSecret: z.string().max(500).nullable().optional(),
+      }),
+    );
+    if (b.issuer && !/^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(b.issuer))
+      throw new HttpError(
+        400,
+        "The provider's address starts with https://, like https://id.home.",
+      );
+    await deps.config.update((draft) => {
+      const s = draft.settings.sso;
+      if (b.issuer !== undefined) s.issuer = b.issuer.replace(/\/+$/, "") || undefined;
+      if (b.clientId !== undefined) s.clientId = b.clientId || undefined;
+      if (b.label) s.label = b.label;
+      if (b.adminGroup !== undefined) s.adminGroup = b.adminGroup || undefined;
+    });
+    if (b.clientSecret !== undefined)
+      await deps.secrets.set("sso:client-secret", b.clientSecret || null);
+    // Check the provider answers, now that it's saved.
+    if (deps.sso?.enabled) await deps.sso.discovery();
+    changed();
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/admin/sso/links/:profile", async (c) => {
+    requireAdmin(c);
+    await deps.auth.unlink(c.req.param("profile"));
+    return c.json({ ok: true });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The trust page: the root certificate's public half, for anyone on the network
+
+  app.get("/api/trust", (c) => {
+    c.header("Cache-Control", "no-store");
+    const redirect = cfg().settings.trust.redirect;
+    return c.json(deps.trust ? deps.trust.info(redirect) : { available: false, redirect });
+  });
+
+  /** A browser says whether it trusts the root (it tried the https address), for the Devices page. */
+  app.post("/api/trust/seen", async (c) => {
+    const b = await body(c, z.object({ trusted: z.boolean() }));
+    const here = whereFrom(c);
+    // Before the page has its device cookie there's nothing to keep it with: the page asks again.
+    if (!deps.devices || !here.browser || !here.ip) return c.json({ ok: true, kept: false });
+    await deps.devices.sawTrust({ browser: here.browser, ip: here.ip }, b.trusted);
+    return c.json({ ok: true, kept: true });
+  });
+
+  /** Answers over https only if the device trusts the root (the page checks with it). */
+  app.get("/api/trust/ping", (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.body(null, 204);
+  });
+
+  const rootFile = (kind: "crt" | "mobileconfig") => (c: Context) => {
+    const cert = deps.trust?.get().cert;
+    if (!cert) return c.text("No root certificate is set up.", 404);
+    const home = cfg().settings.homeName ?? cfg().settings.title;
+    return kind === "crt"
+      ? c.body(cert.pem, 200, {
+          "content-type": "application/x-x509-ca-cert",
+          "content-disposition": 'attachment; filename="home-root-ca.crt"',
+          "cache-control": "no-cache",
+        })
+      : c.body(mobileconfig(cert, home), 200, {
+          "content-type": "application/x-apple-aspen-config",
+          "content-disposition": 'attachment; filename="home-certificate.mobileconfig"',
+          "cache-control": "no-cache",
+        });
+  };
+  app.get("/trust/home-root-ca.crt", rootFile("crt"));
+  app.get("/trust/home-certificate.mobileconfig", rootFile("mobileconfig"));
 
   app.get("/api/status", (c) => {
     c.header("Cache-Control", "no-store");
-    return c.json(deps.status());
+    return c.json(statusFor(deps.status(), cfg().tiles, who(c).profile?.id ?? null));
   });
 
   app.get("/api/widgets/:id", async (c) => {
@@ -366,7 +725,7 @@ export function createApp(deps: AppDeps): Hono {
       if (!w.admin) throw new HttpError(403, "Pick who you are first.");
       return { w, profileId: null }; // The admin arranging the guest page.
     }
-    if (w.profile.locked && !w.admin)
+    if (isLocked(w.profile) && !w.admin)
       throw new HttpError(403, "This page is locked. Ask the admin to change it.");
     return { w, profileId: w.profile.id };
   };
@@ -401,7 +760,14 @@ export function createApp(deps: AppDeps): Hono {
 
   app.put("/api/me/layout", async (c) => {
     const { profileId } = editable(c);
-    const layout = await body(c, LayoutSchema);
+    // A request that doesn't say the board's order or links (the rail's editor) keeps them.
+    const layout = await body(
+      c,
+      LayoutSchema.extend({
+        board: z.array(z.string().max(80)).max(400).optional(),
+        joined: z.array(z.string().max(80)).max(400).optional(),
+      }),
+    );
     const role = profileId ? (findProfile(cfg(), profileId)?.role ?? null) : null;
     for (const p of layout.widgets) {
       const widget = cfg().widgets.find((x) => x.id === p.id);
@@ -409,7 +775,11 @@ export function createApp(deps: AppDeps): Hono {
         throw new HttpError(400, `There's no widget "${p.id}" for this page.`);
     }
     await editPage(profileId, (t) => {
-      t.layout = layout;
+      t.layout = {
+        ...layout,
+        board: layout.board ?? t.layout.board,
+        joined: layout.joined ?? t.layout.joined,
+      };
     });
     changed();
     return c.json({ ok: true });
@@ -446,7 +816,7 @@ export function createApp(deps: AppDeps): Hono {
     const w = who(c);
     if (w.admin) return w;
     if (!w.profile) throw new HttpError(403, "Pick who you are first.");
-    if (w.profile.locked)
+    if (isLocked(w.profile))
       throw new HttpError(403, "This page is locked. Ask the admin to change it.");
     return w;
   };
@@ -662,6 +1032,9 @@ export function createApp(deps: AppDeps): Hono {
     });
     if (collection === "profiles" && item.id !== oldId)
       await deps.calendar?.renamePerson(oldId, item.id);
+    if (collection === "profiles" && item.id !== oldId)
+      await deps.internet?.renamePerson(oldId, item.id);
+    if (collection === "profiles" && item.id !== oldId) await deps.auth.renameLinks(oldId, item.id);
     changed();
     return c.json({ ok: true });
   });
@@ -679,9 +1052,13 @@ export function createApp(deps: AppDeps): Hono {
       ).filter((x) => x.id !== id);
       removeRefs(draft, collection, id);
     });
+    // A widget's key goes with it.
+    if (collection === "widgets") await deps.secrets.set(`widget:${id}`, null);
     if (collection === "profiles") {
       await deps.auth.forgetProfile(id);
       await deps.calendar?.forget(id);
+      await deps.devices?.forget(id);
+      await deps.internet?.forget(id);
     }
     changed();
     return c.json({ ok: true });
@@ -791,11 +1168,34 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(await deps.hub.preview(b.doc));
   });
 
+  /**
+   * What a widget can read without an address or a key: Hearth's own data, and the systems
+   * connected in Settings (their sign-ins stay here).
+   */
+  app.get("/api/admin/widgets/connections", (c) => {
+    requireAdmin(c);
+    const s = cfg().settings;
+    const m = deps.monitor;
+    const ready: Record<string, boolean> = {
+      devices: Boolean(m),
+      network: Boolean(s.router.url),
+      machines: Boolean(m?.aiMachines().length),
+      ai: s.ai.servers.length > 0,
+      pinball: Boolean(m?.tablesFound().length),
+      smarthome: Boolean(s.smarthome.openhab?.url || s.smarthome.homeassistant?.url),
+    };
+    return c.json({
+      hearth: HEARTH_DATA.map((h) => ({ ...h, ready: ready[h.what] ?? true })),
+      connections: publicConnections(cfg(), deps.secrets),
+    });
+  });
+
   app.get("/api/widgets-guide", (c) => {
     requireAdmin(c);
     const guide = widgetGuide({
       secrets: deps.secrets.names(),
       allowInternet: cfg().settings.network.allowInternet,
+      connections: publicConnections(cfg(), deps.secrets),
     });
     return c.text(
       `Write one widget for Hearth, the start page of a home network. Reply with only the widget JSON document.\n\nWhat I want on it: <describe it here, with the API's address>\n\n${guide}`,
@@ -841,6 +1241,7 @@ export function createApp(deps: AppDeps): Hono {
             allowInternet: cfg().settings.network.allowInternet,
             homeName: cfg().settings.homeName,
             services: cfg().tiles.map((t) => ({ name: t.name, url: t.url, checkUrl: t.checkUrl })),
+            connections: publicConnections(cfg(), deps.secrets),
             log: (msg) => console.log(`[hearth] ${msg}`),
           },
           b.messages as ChatMessage[],
@@ -968,7 +1369,7 @@ export function createApp(deps: AppDeps): Hono {
   /** Fetch a site's own icon into data/icons. Anyone arranging their own page may. */
   app.post("/api/icons/fetch", async (c) => {
     const w = who(c);
-    if (!w.admin && !(w.profile && !w.profile.locked))
+    if (!w.admin && !(w.profile && !isLocked(w.profile)))
       throw new HttpError(403, "Pick who you are first.");
     const b = await body(c, z.object({ url: z.url({ protocol: /^https?$/ }) }));
     // Like widgets, only the home network unless the admin allowed the internet.
@@ -1212,11 +1613,485 @@ export function createApp(deps: AppDeps): Hono {
         needsInternet: g.needsInternet ?? false,
         params: g.params ?? [],
       })),
-      yours: cfg()
-        .tiles.filter((t) => t.app)
-        .map((t) => ({ tile: t.id, name: t.name, url: t.url, app: t.app })),
+      yours: yourApps(all),
+      builtins: yourBuiltins(),
       allowInternet: cfg().settings.network.allowInternet,
     });
+  });
+
+  /**
+   * The apps this home has, for "Your apps": tiles that say which app they are, or whose logo,
+   * name or address gives it away, and apps port checks found on the network.
+   */
+  const yourApps = (all: AppDef[]) => {
+    const withWidgets = all.filter((a) => a.widgets?.length);
+    const found = deps.monitor?.foundApps() ?? [];
+    const originOf = (u: string) => {
+      try {
+        return new URL(u).origin;
+      } catch {
+        return u;
+      }
+    };
+    const plain = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const out: { tile?: string; name: string; url: string; app: string; known: boolean }[] = [];
+    const seen = new Set<string>();
+    const add = (app: string, url: string, name: string, tile?: string) => {
+      const key = `${app}|${originOf(url)}`;
+      if (seen.has(key) || !withWidgets.some((a) => a.id === app)) return;
+      seen.add(key);
+      out.push({
+        tile,
+        name,
+        url,
+        app,
+        known: Boolean(knownSecret(app, url) || accessFor(app, url)),
+      });
+    };
+    for (const t of cfg().tiles) {
+      const app =
+        t.app ??
+        withWidgets.find((a) => t.icon && a.icon.startsWith("si:") && a.icon === t.icon)?.id ??
+        withWidgets.find((a) => plain(a.name) === plain(t.name) || a.id === plain(t.name))?.id ??
+        found.find((f) => originOf(f.url) === originOf(t.url))?.app;
+      if (app) add(app, t.url, t.name, t.id);
+    }
+    // Systems already connected in Settings, with their sign-in.
+    const s = cfg().settings;
+    if (s.adguard.url) add("adguard-home", s.adguard.url, "AdGuard Home");
+    if (s.smarthome.homeassistant?.url)
+      add("home-assistant", s.smarthome.homeassistant.url, "Home Assistant");
+    if (s.smarthome.openhab?.url) add("openhab", s.smarthome.openhab.url, "openHAB");
+    for (const m of s.services) {
+      const a = withWidgets.find((x) => x.id === m.app);
+      if (a) add(m.app, m.url, m.name ?? a.name);
+    }
+    // One per app on each device (openHAB answers on two ports), and none for an app a tile
+    // already gives (the tile's address is usually the nicer one: muny.home, not an IP).
+    const fromTiles = new Set(out.map((y) => y.app));
+    const perDevice = new Set<string>();
+    for (const f of found) {
+      const a = withWidgets.find((x) => x.id === f.app);
+      const key = `${f.app}|${f.device}`;
+      if (!a || fromTiles.has(f.app) || perDevice.has(key)) continue;
+      perDevice.add(key);
+      add(f.app, f.url, `${a.name} on ${f.device}`);
+    }
+    return out;
+  };
+
+  // ---------------------------------------------------------------------------
+  // Access: a sign-in Hearth keeps for an app at an address, given on the Devices page
+
+  const SETUP_APPS: Record<string, "adguard" | "homeassistant" | "openhab"> = {
+    "adguard-home": "adguard",
+    "home-assistant": "homeassistant",
+    openhab: "openhab",
+  };
+  const sameOrigin = (a: string, b: string) => {
+    try {
+      return new URL(a).origin === new URL(b).origin;
+    } catch {
+      return false;
+    }
+  };
+  const accessFor = (app: string, base: string) =>
+    cfg().settings.access.find((x) => x.app === app && sameOrigin(x.base, base));
+
+  // ---------------------------------------------------------------------------
+  // Services added by hand, and links to suggest
+
+  const ServiceBody = z.object({
+    app: z.string().max(40),
+    url: z.url({ protocol: /^https?$/ }).max(300),
+    name: z.string().trim().max(60).optional(),
+  });
+
+  /** Add a service the port checks didn't find: which app, and where. */
+  app.post("/api/admin/services", async (c) => {
+    requireAdmin(c);
+    const b = await body(c, ServiceBody);
+    if (![...APPS, ...extraApps()].some((a) => a.id === b.app))
+      throw new HttpError(404, "Hearth doesn't know that app.");
+    const url = new URL(b.url).origin;
+    await deps.config.update((draft) => {
+      draft.settings.services = [
+        ...draft.settings.services.filter((x) => !(x.app === b.app && sameOrigin(x.url, url))),
+        { app: b.app, url, name: b.name || undefined },
+      ];
+    });
+    changed();
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/admin/services", async (c) => {
+    requireAdmin(c);
+    const app_ = c.req.query("app") ?? "";
+    const url = c.req.query("url") ?? "";
+    await deps.config.update((draft) => {
+      draft.settings.services = draft.settings.services.filter(
+        (x) => !(x.app === app_ && sameOrigin(x.url, url)),
+      );
+    });
+    changed();
+    return c.json({ ok: true });
+  });
+
+  /**
+   * Services the home has that no link leads to yet (found on the network, added by hand, or
+   * connected in Setup), to offer when adding a link.
+   */
+  app.get("/api/admin/link-suggestions", (c) => {
+    requireAdmin(c);
+    const all = [...APPS, ...extraApps()];
+    const s = cfg().settings;
+    const linked = new Set(
+      cfg().tiles.flatMap((t) =>
+        [t.url, t.checkUrl].flatMap((u) => {
+          try {
+            return u ? [new URL(u).origin] : [];
+          } catch {
+            return [];
+          }
+        }),
+      ),
+    );
+    const out: LinkSuggestion[] = [];
+    const add = (appId: string, url: string, name?: string) => {
+      const a = all.find((x) => x.id === appId);
+      let origin: string;
+      try {
+        origin = new URL(url).origin;
+      } catch {
+        return;
+      }
+      if (!a || linked.has(origin) || out.some((x) => x.url === origin)) return;
+      out.push({
+        app: a.id,
+        name: name ?? a.name,
+        url: origin,
+        icon: a.icon,
+        color: a.color ?? iconColor(a.icon),
+        description: a.description,
+        svg: resolveIcon(a.icon).svg,
+      });
+    };
+    for (const m of s.services) add(m.app, m.url, m.name);
+    if (s.adguard.url) add("adguard-home", s.adguard.url);
+    if (s.smarthome.homeassistant?.url) add("home-assistant", s.smarthome.homeassistant.url);
+    if (s.smarthome.openhab?.url) add("openhab", s.smarthome.openhab.url);
+    // Found by the port checks: one per app on each device.
+    const seen = new Set<string>();
+    for (const f of deps.monitor?.foundApps() ?? []) {
+      const key = `${f.app}|${f.device}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const a = all.find((x) => x.id === f.app);
+      add(f.app, f.url, a ? `${a.name}` : undefined);
+    }
+    return c.json({ suggestions: out.slice(0, 24) });
+  });
+
+  /** Every app on the network Hearth knows, and whether it can read it. */
+  /**
+   * A widget made for this app here already has its key: keep it as the app's access (how the
+   * widget sends it: a header, a digest, a parameter), so nobody is asked for it twice.
+   */
+  const adoptFromWidget = async (app: string, origin: string): Promise<boolean> => {
+    for (const w of cfg().widgets) {
+      if (w.type !== "custom") continue;
+      const name = `widget:${w.id}`;
+      const ref = `{{secret:${name}}}`;
+      const secret = deps.secrets.get(name);
+      if (!secret) continue;
+      for (const s of w.doc.sources) {
+        if (s.kind !== "http" || !sameOrigin(s.url, origin)) continue;
+        let way: { kind: Access["kind"]; header?: string; param?: string } | null = null;
+        if (s.digest === ref) way = { kind: "digest" };
+        const h = Object.entries(s.headers).find(([, v]) => v === ref);
+        if (!way && h) way = { kind: "header", header: h[0] };
+        const q = new URL(s.url.replace(ref, "x")).searchParams;
+        const p = [...q.keys()].find((k) => s.url.includes(`${k}=${ref}`));
+        if (!way && p) way = { kind: "query", param: p };
+        if (!way) continue;
+        const id = accessId(app, origin);
+        await deps.secrets.set(accessSecret(id), secret);
+        await deps.config.update((draft) => {
+          draft.settings.access = [
+            ...draft.settings.access.filter((x) => x.id !== id),
+            { id, app, base: origin, ...way, at: new Date().toISOString() },
+          ];
+        });
+        return true;
+      }
+    }
+    return false;
+  };
+
+  app.get("/api/admin/access", async (c) => {
+    requireAdmin(c);
+    const all = [...APPS, ...extraApps()];
+    const widgets = cfg().widgets;
+    // Keys already given to a widget become the app's access first.
+    for (const y of yourApps(all)) {
+      if (SETUP_APPS[y.app] || accessFor(y.app, y.url)) continue;
+      try {
+        await adoptFromWidget(y.app, new URL(y.url).origin);
+      } catch {
+        // Not a widget Hearth can read the key's use from: ask for it.
+      }
+    }
+    const listed = yourApps(all);
+    // Added by hand: every one shows, widgets or not.
+    for (const m of cfg().settings.services)
+      if (!listed.some((y) => y.app === m.app && sameOrigin(y.url, m.url))) {
+        const a = all.find((x) => x.id === m.app);
+        if (a) listed.push({ name: m.name ?? a.name, url: m.url, app: m.app, known: false });
+      }
+    const manual = (appId: string, url: string) =>
+      cfg().settings.services.some((m) => m.app === appId && sameOrigin(m.url, url));
+    const items: AccessItem[] = listed.map((y) => {
+      const a = all.find((x) => x.id === y.app) as AppDef;
+      const ways = authWays(a);
+      const saved = accessFor(a.id, y.url);
+      const setup = SETUP_APPS[a.id];
+      const origin = (() => {
+        try {
+          return new URL(y.url).origin;
+        } catch {
+          return y.url;
+        }
+      })();
+      return {
+        key: `${a.id}|${origin}`,
+        app: a.id,
+        appName: a.name,
+        name: y.name,
+        base: origin,
+        icon: a.icon,
+        svg: resolveIcon(a.icon).svg,
+        // AdGuard Home and the hubs keep their sign-in in their own settings.
+        status:
+          saved || (setup && knownSecret(a.id, origin))
+            ? "connected"
+            : ways.length
+              ? "needed"
+              : "open",
+        setup,
+        ways,
+        access: saved
+          ? {
+              id: saved.id,
+              kind: saved.kind,
+              header: saved.header,
+              param: saved.param,
+              at: saved.at,
+            }
+          : undefined,
+        manual: manual(a.id, origin) || undefined,
+        widgets: widgets.filter(
+          (w) => w.type === "custom" && JSON.stringify(w.doc).includes(origin),
+        ).length,
+      };
+    });
+    return c.json({ items });
+  });
+
+  const AccessBody = z.object({
+    app: z.string().max(40),
+    base: z.string().url().max(300),
+    kind: z.enum(AUTH_KINDS),
+    header: z
+      .string()
+      .regex(/^[A-Za-z0-9-]{1,60}$/)
+      .optional(),
+    param: z
+      .string()
+      .regex(/^[A-Za-z0-9_.-]{1,60}$/)
+      .optional(),
+    /** The key, token, or "user:password". Left out on a check: the saved one. */
+    secret: z.string().min(1).max(4000).optional(),
+  });
+
+  /** Try a sign-in on the app's own API before keeping it. */
+  const checkAccess = async (b: z.infer<typeof AccessBody>, secret: string) => {
+    const a = [...APPS, ...extraApps()].find((x) => x.id === b.app);
+    if (!a) throw new HttpError(404, "Hearth doesn't know that app.");
+    const path = appPaths(a)[0]?.get ?? "/";
+    let base: string;
+    try {
+      base = new URL(b.base).origin;
+    } catch {
+      throw new HttpError(400, "That isn't an address.");
+    }
+    try {
+      const res = await readConnection({ base, ...signIn(b, secret) }, path, deps.fetch);
+      if (res.status === 401 || res.status === 403)
+        return { ok: false, note: "It said no: that sign-in isn't right." };
+      if (res.status >= 400) return { ok: false, note: `It answered ${res.status} for ${path}.` };
+      return { ok: true, note: `Read ${path}.` };
+    } catch (e) {
+      return { ok: false, note: deps.secrets.redact((e as Error).message) };
+    }
+  };
+
+  app.post("/api/admin/access/check", async (c) => {
+    requireAdmin(c);
+    const b = await body(c, AccessBody);
+    const secret = b.secret ?? deps.secrets.get(accessSecret(accessId(b.app, b.base)));
+    if (!secret) throw new HttpError(400, "Give the key or the password to check.");
+    return c.json(await checkAccess(b, secret));
+  });
+
+  /** Keep a sign-in for an app (checked first), for its widgets and connection sources. */
+  app.put("/api/admin/access", async (c) => {
+    requireAdmin(c);
+    const b = await body(c, AccessBody);
+    const id = accessId(b.app, b.base);
+    const secret = b.secret ?? deps.secrets.get(accessSecret(id));
+    if (!secret) throw new HttpError(400, "Give the key or the password.");
+    const check = await checkAccess(b, secret);
+    if (!check.ok) throw new HttpError(400, `Hearth tried it: ${check.note}`);
+    const base = new URL(b.base).origin;
+    await deps.secrets.set(accessSecret(id), secret);
+    await deps.config.update((draft) => {
+      draft.settings.access = [
+        ...draft.settings.access.filter((x) => x.id !== id),
+        {
+          id,
+          app: b.app,
+          base,
+          kind: b.kind,
+          header: b.kind === "header" ? b.header : undefined,
+          param: b.kind === "query" ? b.param : undefined,
+          at: new Date().toISOString(),
+        },
+      ];
+    });
+    changed();
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/api/admin/access/:id", async (c) => {
+    requireAdmin(c);
+    const id = c.req.param("id");
+    await deps.config.update((draft) => {
+      draft.settings.access = draft.settings.access.filter((x) => x.id !== id);
+    });
+    await deps.secrets.set(accessSecret(id), null);
+    changed();
+    return c.json({ ok: true });
+  });
+
+  /** Built-in widgets this home can use: the pinball table, the AI servers. */
+  const yourBuiltins = () => {
+    const out: {
+      type: "pinball" | "ai";
+      name: string;
+      description: string;
+      options?: { device?: string };
+    }[] = [];
+    for (const t of deps.monitor?.tablesFound() ?? [])
+      out.push({
+        type: "pinball",
+        name: `Pinball: ${t.name}`,
+        description:
+          "What's being played, the latest high scores and the players, from VPin Studio.",
+        options: t.device ? { device: t.device } : undefined,
+      });
+    const servers = cfg().settings.ai.servers;
+    if (servers.length) {
+      // Named after the home's own server, and saying so when it shares work across computers.
+      const shared = (deps.monitor?.aiMachines() ?? []).reduce((n, g) => n + g.list.length, 0);
+      out.push({
+        type: "ai",
+        name:
+          servers.length === 1
+            ? `${(servers[0] as { name: string }).name}: AI server`
+            : `AI servers: ${servers.map((s) => s.name).join(", ")}`,
+        description: shared
+          ? `Up or busy, what's loaded, and the ${shared} computer${shared === 1 ? "" : "s"} it shares work with: each one's graphics card, what it's answering and how fast.`
+          : "Your AI servers: up, busy, and what's loaded.",
+      });
+    }
+    return out;
+  };
+
+  /**
+   * A sign-in Hearth already keeps for this app at this address (AdGuard Home's, a smart-home
+   * hub's token), as a widget's Authorization header. Never sent to the page.
+   */
+  const knownSecret = (app: string, base: string): string | undefined => {
+    let origin: string;
+    try {
+      origin = new URL(base).origin;
+    } catch {
+      return undefined;
+    }
+    const same = (u?: string) => {
+      try {
+        return Boolean(u) && new URL(u as string).origin === origin;
+      } catch {
+        return false;
+      }
+    };
+    const s = cfg().settings;
+    if (app === "adguard-home" && same(s.adguard.url)) {
+      const pass = deps.secrets.get("adguard:password");
+      if (s.adguard.username && pass)
+        return `Basic ${Buffer.from(`${s.adguard.username}:${pass}`).toString("base64")}`;
+    }
+    if (app === "home-assistant" && same(s.smarthome.homeassistant?.url)) {
+      const t = deps.secrets.get("smarthome:homeassistant");
+      if (t) return `Bearer ${t}`;
+    }
+    if (app === "openhab" && same(s.smarthome.openhab?.url)) {
+      const t = deps.secrets.get("smarthome:openhab");
+      if (t) return `Bearer ${t}`;
+    }
+    return undefined;
+  };
+
+  /** Put a built-in widget on a page (the Pinball table, the AI servers): reused if it's made. */
+  app.post("/api/admin/widgets/builtin", async (c) => {
+    requireAdmin(c);
+    const b = await body(
+      c,
+      z.object({
+        type: z.enum(["pinball", "ai"]),
+        options: z.object({ device: z.string().max(64).optional() }).optional(),
+        title: z.string().max(40).optional(),
+        page: z.string().max(40).optional(),
+      }),
+    );
+    const sameOptions = (w: Widget) =>
+      w.type === b.type &&
+      (w.type !== "pinball" || (w.options.device ?? "") === (b.options?.device ?? ""));
+    let id = cfg().widgets.find(sameOptions)?.id;
+    if (!id) {
+      const title = (b.title ?? (b.type === "pinball" ? "Pinball" : "AI servers")).slice(0, 40);
+      let newId = slugOf(title, "widget");
+      for (let n = 2; cfg().widgets.some((w) => w.id === newId); n++)
+        newId = `${slugOf(title, "widget")}-${n}`;
+      const parsed = WidgetSchema.parse(
+        b.type === "pinball"
+          ? { id: newId, type: "pinball", title, options: b.options ?? {} }
+          : { id: newId, type: "ai", title },
+      );
+      await deps.config.update((draft) => {
+        draft.widgets.push(parsed);
+      });
+      id = newId;
+    }
+    const wid = id;
+    await deps.config.update((draft) => {
+      const page =
+        b.page === "guest" ? draft.settings.guest : draft.profiles.find((p) => p.id === b.page);
+      if (page && !page.layout.widgets.some((x) => x.id === wid))
+        page.layout.widgets.push({ id: wid, w: 4 });
+    });
+    changed();
+    return c.json({ id: wid });
   });
 
   /** Add a widget from the catalog: fill its template, keep its key as a secret, put it on a page. */
@@ -1230,6 +2105,8 @@ export function createApp(deps: AppDeps): Hono {
         general: z.string().max(40).optional(),
         base: z.string().max(500).optional(),
         secret: z.string().max(4000).optional(),
+        /** Use the sign-in Hearth already keeps for this app at this address. */
+        useKnown: z.boolean().optional(),
         params: z.record(z.string(), z.string().max(500)).default({}),
         title: z.string().max(40).optional(),
         audience: Audience.optional(),
@@ -1256,7 +2133,48 @@ export function createApp(deps: AppDeps): Hono {
       privateWidget = wd.private ?? false;
       if (!b.base) throw new HttpError(400, `Where is ${a.name}? Give its address.`);
     }
+    // Access Hearth keeps for the app here: the widget reads through it and holds no key.
+    const access =
+      !b.general && b.base && !b.secret ? accessFor(b.app as string, b.base) : undefined;
+    if (access) {
+      template = throughAccess(template, access.id);
+      needsSecret = false;
+    } else if (b.useKnown && !b.general && b.base) {
+      const known = knownSecret(b.app as string, b.base);
+      if (!known)
+        throw new HttpError(400, "Hearth doesn't have a sign-in for that one. Give it here.");
+      b.secret = known;
+    }
     const title = (b.title?.trim() || name).slice(0, 40);
+    // The same widget from the same place already made: use it, don't make another copy.
+    const same = cfg().widgets.find((w) => {
+      if (w.type !== "custom") return false;
+      const filled = WidgetSchema.safeParse({
+        id: w.id,
+        type: "custom",
+        doc: fillTemplate(template, {
+          base: b.base,
+          secretName: needsSecret ? `widget:${w.id}` : undefined,
+          params: b.params,
+        }),
+      });
+      return (
+        filled.success &&
+        filled.data.type === "custom" &&
+        JSON.stringify(filled.data.doc) === JSON.stringify(w.doc)
+      );
+    });
+    if (same) {
+      if (needsSecret && b.secret) await deps.secrets.set(`widget:${same.id}`, b.secret);
+      await deps.config.update((draft) => {
+        const page =
+          b.page === "guest" ? draft.settings.guest : draft.profiles.find((p) => p.id === b.page);
+        if (page && !page.layout.widgets.some((x) => x.id === same.id))
+          page.layout.widgets.push({ id: same.id, w: 4 });
+      });
+      changed();
+      return c.json({ id: same.id, existing: true });
+    }
     let id = slugOf(title, "widget");
     for (let n = 2; cfg().widgets.some((w) => w.id === id); n++)
       id = `${slugOf(title, "widget")}-${n}`;
@@ -1302,6 +2220,61 @@ export function createApp(deps: AppDeps): Hono {
       changed: () => changed("calendar"),
     });
 
+  // ---------------------------------------------------------------------------
+  // Files
+
+  if (deps.files)
+    filesRoutes(app, {
+      files: deps.files,
+      config: deps.config,
+      secrets: deps.secrets,
+      who: (c) => who(c),
+      hasPin: (p) => deps.auth.hasPin(p),
+      requireAdmin: (c) => {
+        requireAdmin(c);
+      },
+      body,
+    });
+
+  if (deps.updates)
+    updateRoutes(app, {
+      updates: deps.updates,
+      requireAdmin: (c) => {
+        requireAdmin(c);
+      },
+    });
+
+  // ---------------------------------------------------------------------------
+  // Devices
+
+  if (deps.devices)
+    deviceRoutes(app, {
+      service: deps.devices,
+      monitor: deps.monitor,
+      smart: deps.smart,
+      config: deps.config,
+      secrets: deps.secrets,
+      requireAdmin,
+      body,
+      here: whereFrom,
+      fetch: deps.fetch,
+    });
+
+  // ---------------------------------------------------------------------------
+  // Internet controls
+
+  if (deps.internet)
+    internetRoutes(app, {
+      service: deps.internet,
+      requireAdmin,
+      who,
+      body,
+      here: whereFrom,
+      profiles: () => cfg().profiles,
+      checkPin: (p, pin) => deps.auth.checkPin(p, pin),
+      changed: () => changed("internet"),
+    });
+
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   // ---------------------------------------------------------------------------
@@ -1338,8 +2311,13 @@ export function createApp(deps: AppDeps): Hono {
     // The page's own routes (the app decides what to show).
     for (const route of [
       "/calendar",
+      "/trust",
+      "/welcome",
+      "/family",
+      "/family/*",
       "/chat",
       "/compute",
+      "/devices",
       "/widgets",
       "/widgets/*",
       "/themes",

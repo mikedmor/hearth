@@ -7,6 +7,7 @@
  */
 import type { StatusMap, TileStatus } from "../shared/api";
 import { isChecked, type Tile } from "../shared/config";
+import { reachable } from "./net";
 
 export interface StatusOptions {
   intervalMs: number;
@@ -54,7 +55,11 @@ export class StatusChecker {
 
   /** Replace what's checked. Keeps results for tiles whose address didn't change. */
   setTiles(tiles: Tile[]): void {
-    const next = tiles.filter(isChecked).map((t) => ({ id: t.id, url: t.checkUrl ?? t.url }));
+    this.setTargets(tiles.filter(isChecked).map((t) => ({ id: t.id, url: t.checkUrl ?? t.url })));
+  }
+
+  /** Replace what's checked with any addresses (services found on devices, say). */
+  setTargets(next: Target[]): void {
     const before = new Map(this.targets.map((t) => [t.id, t.url]));
     for (const id of this.entries.keys()) {
       const target = next.find((t) => t.id === id);
@@ -101,7 +106,7 @@ export class StatusChecker {
     const started = now();
     let ok = false;
     try {
-      const res = await doFetch(target.url, {
+      const res = await doFetch(await reachable(target.url), {
         method: "GET",
         redirect: "manual",
         signal: AbortSignal.timeout(this.opts.timeoutMs),

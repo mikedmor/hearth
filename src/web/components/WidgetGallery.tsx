@@ -5,20 +5,31 @@
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Plus, Search, Sparkles, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  Minus,
+  Pencil,
+  Plus,
+  Search,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import type { HomeView, IconSvg } from "../../shared/api";
-import type { Audience } from "../../shared/config";
+import type { Audience, Widget } from "../../shared/config";
 import { api } from "../lib/api";
 import { cx } from "../lib/format";
+import { keys, useAdminConfig } from "../lib/queries";
+import { WidgetSettings } from "../pages/WidgetsPage";
 import { TileIcon } from "./Tile";
-import { Button, ErrorNote, Field, Input, Modal, Select, useToast } from "./ui";
+import { Button, ErrorNote, Field, IconButton, Input, Modal, Select, useToast } from "./ui";
 import { DEFAULT_TITLES } from "./widgets/WidgetCard";
 
 interface Secret {
   label: string;
   hint: string;
-  kind?: "key" | "basic" | "bearer";
+  kind?: "key" | "basic" | "bearer" | "digest";
 }
 interface Param {
   key: string;
@@ -55,12 +66,27 @@ interface General {
 interface Catalog {
   apps: AppSummary[];
   general: General[];
-  yours: { tile: string; name: string; url: string; app: string }[];
+  /** Apps this home has (from tiles and port checks), and whether Hearth has their sign-in. */
+  yours: { tile?: string; name: string; url: string; app: string; known: boolean }[];
+  /** Built-in widgets this home can use (the pinball table, the AI servers). */
+  builtins: {
+    type: "pinball" | "ai";
+    name: string;
+    description: string;
+    options?: { device?: string };
+  }[];
   allowInternet: boolean;
 }
 
 type Choice =
-  | { kind: "app"; app: AppSummary; widget: AppSummary["widgets"][number]; base?: string }
+  | {
+      kind: "app";
+      app: AppSummary;
+      widget: AppSummary["widgets"][number];
+      base?: string;
+      /** Hearth already keeps the sign-in for this app at this address. */
+      known?: boolean;
+    }
   | { kind: "general"; template: General };
 
 export function WidgetGallery({
@@ -76,6 +102,8 @@ export function WidgetGallery({
   const [tab, setTab] = useState<"list" | "yours" | "apps" | "general">("list");
   const [choice, setChoice] = useState<Choice | null>(null);
   const [q, setQ] = useState("");
+  const [editing, setEditing] = useState<Widget | null>(null);
+  const adminConfig = useAdminConfig(admin);
   const catalog = useQuery({
     queryKey: ["catalog"],
     queryFn: () => api.get<Catalog>("/api/admin/catalog"),
@@ -87,7 +115,16 @@ export function WidgetGallery({
     if (!c) return [];
     return c.yours.flatMap((y) => {
       const app = c.apps.find((a) => a.id === y.app);
-      return app ? app.widgets.map((w) => ({ app, widget: w, base: y.url, tile: y.name })) : [];
+      return app
+        ? app.widgets.map((w) => ({
+            app,
+            widget: w,
+            base: y.url,
+            tile: y.name,
+            known: y.known,
+            fromTile: Boolean(y.tile),
+          }))
+        : [];
     });
   }, [catalog.data]);
   const apps = useMemo(() => {
@@ -101,11 +138,55 @@ export function WidgetGallery({
     );
   }, [catalog.data, q]);
 
+  const qc = useQueryClient();
+  const toast = useToast();
+  const addBuiltin = async (b: Catalog["builtins"][number]) => {
+    try {
+      await api.post("/api/admin/widgets/builtin", {
+        type: b.type,
+        options: b.options,
+        page: view.profile?.id ?? "guest",
+      });
+      toast(`${b.name} is on your page`);
+      await qc.invalidateQueries();
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "bad");
+    }
+  };
+
+  const takeOff = async (id: string, name: string) => {
+    try {
+      await api.put("/api/me/layout", {
+        sections: view.sections,
+        widgets: view.widgets.filter((w) => w.id !== id).map((w) => ({ id: w.id, w: w.w })),
+        board: view.board.filter((k) => k !== `w:${id}`),
+      });
+      toast(`${name} is off this page`);
+    } catch (e) {
+      toast((e as Error).message, "bad");
+    }
+    await qc.invalidateQueries({ queryKey: keys.home });
+  };
+  const editWidget = (id: string) => {
+    const w = adminConfig.data?.config.widgets.find((x) => x.id === id);
+    if (w) setEditing(w);
+  };
+
+  if (editing)
+    return (
+      <WidgetSettings
+        widget={editing}
+        onClose={() => setEditing(null)}
+        taken={(adminConfig.data?.config.widgets ?? []).map((w) => w.id)}
+      />
+    );
+
   const tabs = [
     { id: "list" as const, label: "On your list", show: true },
     {
       id: "yours" as const,
-      label: `Your apps${yours.length ? ` (${yours.length})` : ""}`,
+      label: `Your apps${yours.length + (catalog.data?.builtins.length ?? 0) ? ` (${yours.length + (catalog.data?.builtins.length ?? 0)})` : ""}`,
       show: admin,
     },
     { id: "apps" as const, label: "All apps", show: admin },
@@ -153,59 +234,135 @@ export function WidgetGallery({
             ) : null}
           </div>
 
+          {admin ? null : (
+            <p className="-mt-1 text-[12.5px] text-muted">
+              Signed in as the admin, you can also add widgets for your apps and general ones, and
+              edit widgets.
+            </p>
+          )}
+
           {tab === "list" ? (
-            view.library.length ? (
-              <ul className="grid gap-2 sm:grid-cols-2">
-                {view.library.map((w) => (
-                  <li key={w.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onAdd(w.id);
-                        onClose();
-                      }}
-                      className="card flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:border-accent"
-                    >
-                      <span className="grid">
-                        <span className="font-semibold">{w.title ?? DEFAULT_TITLES[w.type]}</span>
-                        <span className="text-[12.5px] text-muted">
-                          {w.type === "custom"
-                            ? "Custom widget"
-                            : `Built in: ${DEFAULT_TITLES[w.type].toLowerCase()}`}
-                        </span>
-                      </span>
-                      <Plus className="size-5 text-accent" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-muted">
-                Every widget on the list is already on this page.
-                {admin
-                  ? " Make more from Your apps, All apps or General."
-                  : " The admin can make more."}
-              </p>
-            )
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <h3 className="text-[12px] font-bold uppercase tracking-[0.08em] text-muted">
+                  On this page
+                </h3>
+                {view.widgets.length ? (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {view.widgets.map((w) => {
+                      const name = w.title ?? DEFAULT_TITLES[w.type];
+                      return (
+                        <li key={w.id} className="card flex items-center gap-1 py-1 pr-2 pl-4">
+                          <span className="grid min-w-0 grow py-2">
+                            <span className="truncate font-semibold">{name}</span>
+                            <span className="truncate text-[12.5px] text-muted">{kindOf(w)}</span>
+                          </span>
+                          {admin ? (
+                            <IconButton
+                              label={`${name}: settings`}
+                              onClick={() => editWidget(w.id)}
+                              disabled={!adminConfig.data}
+                            >
+                              <Pencil className="size-4" />
+                            </IconButton>
+                          ) : null}
+                          {view.canEdit ? (
+                            <IconButton
+                              label={`Take ${name} off this page`}
+                              onClick={() => void takeOff(w.id, name)}
+                            >
+                              <Minus className="size-4" />
+                            </IconButton>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted">No widgets on this page yet.</p>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <h3 className="text-[12px] font-bold uppercase tracking-[0.08em] text-muted">
+                  Add to this page
+                </h3>
+                {view.library.length ? (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {view.library.map((w) => (
+                      <li
+                        key={w.id}
+                        className="card flex items-center gap-1 pr-2 hover:border-accent"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onAdd(w.id);
+                            onClose();
+                          }}
+                          className="flex min-w-0 grow items-center justify-between gap-3 px-4 py-3 text-left"
+                        >
+                          <span className="grid min-w-0">
+                            <span className="truncate font-semibold">
+                              {w.title ?? DEFAULT_TITLES[w.type]}
+                            </span>
+                            <span className="truncate text-[12.5px] text-muted">{kindOf(w)}</span>
+                          </span>
+                          <Plus className="size-5 flex-none text-accent" />
+                        </button>
+                        {admin ? (
+                          <DeleteWidget id={w.id} name={w.title ?? DEFAULT_TITLES[w.type]} />
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted">
+                    Every widget on the list is already on this page.
+                    {admin
+                      ? " Make more from Your apps, All apps or General."
+                      : " The admin can make more."}
+                  </p>
+                )}
+              </div>
+            </div>
           ) : null}
 
           {tab === "yours" ? (
-            yours.length ? (
-              <Cards
-                items={yours.map((y) => ({
-                  key: `${y.app.id}/${y.widget.id}/${y.base}`,
-                  name: y.widget.name,
-                  detail: `${y.widget.description} From your tile “${y.tile}”.`,
-                  svg: y.app.svg,
-                  color: y.app.color,
-                  onPick: () =>
-                    setChoice({ kind: "app", app: y.app, widget: y.widget, base: y.base }),
-                }))}
-              />
+            yours.length || catalog.data?.builtins.length ? (
+              <div className="grid gap-3">
+                {catalog.data?.builtins.length ? (
+                  <Cards
+                    items={catalog.data.builtins.map((b) => ({
+                      key: `builtin/${b.type}/${b.options?.device ?? ""}`,
+                      name: b.name,
+                      detail: `${b.description} Built into Hearth: nothing to fill in.`,
+                      onPick: () => addBuiltin(b),
+                    }))}
+                  />
+                ) : null}
+                <Cards
+                  items={yours.map((y) => ({
+                    key: `${y.app.id}/${y.widget.id}/${y.base}`,
+                    name: y.widget.name,
+                    detail: `${y.widget.description} ${y.fromTile ? `From your tile “${y.tile}”` : `Found: ${y.tile}`}${y.known ? ", and Hearth already has its sign-in" : ""}.`,
+                    svg: y.app.svg,
+                    color: y.app.color,
+                    onPick: () =>
+                      setChoice({
+                        kind: "app",
+                        app: y.app,
+                        widget: y.widget,
+                        base: y.base,
+                        known: y.known,
+                      }),
+                  }))}
+                />
+              </div>
             ) : (
               <p className="text-sm text-muted">
-                None of your tiles is linked to an app with widgets yet. Edit a tile: when Hearth
-                recognises its address, choose “Use its name and icon”. Or pick from All apps.
+                Hearth hasn't found an app with widgets among your tiles or on your network yet.
+                Pick from All apps, and fill in where it is.
               </p>
             )
           ) : null}
@@ -252,6 +409,12 @@ export function WidgetGallery({
       )}
     </Modal>
   );
+}
+
+function kindOf(w: { id: string; type: keyof typeof DEFAULT_TITLES }): string {
+  return w.type === "custom"
+    ? `Custom widget · ${w.id}`
+    : `Built in: ${DEFAULT_TITLES[w.type].toLowerCase()}`;
 }
 
 function Cards({
@@ -312,7 +475,9 @@ function Install({
   const qc = useQueryClient();
   const toast = useToast();
   const isApp = choice.kind === "app";
-  const secret = isApp ? choice.widget.secret : undefined;
+  const known = isApp ? Boolean(choice.known) : false;
+  const [useKnown, setUseKnown] = useState(known);
+  const secret = isApp && !useKnown ? choice.widget.secret : undefined;
   const params = isApp ? (choice.widget.params ?? []) : choice.template.params;
   const tilesForApp = isApp ? (catalog?.yours ?? []).filter((y) => y.app === choice.app.id) : [];
   const [base, setBase] = useState(isApp ? (choice.base ?? tilesForApp[0]?.url ?? "http://") : "");
@@ -334,12 +499,15 @@ function Install({
     ? undefined
     : secret.kind === "basic"
       ? `Basic ${btoa(`${user}:${pass}`)}`
-      : secret.kind === "bearer"
-        ? `Bearer ${key.trim()}`
-        : key.trim();
+      : secret.kind === "digest"
+        ? `${user}:${pass}`
+        : secret.kind === "bearer"
+          ? `Bearer ${key.trim()}`
+          : key.trim();
   const ready =
     (!isApp || /^https?:\/\/[^/\s]+/.test(base)) &&
-    (!secret || (secret.kind === "basic" ? user && pass : key.trim())) &&
+    (!secret ||
+      (secret.kind === "basic" || secret.kind === "digest" ? user && pass : key.trim())) &&
     params.every((p) => values[p.key]?.trim());
 
   const install = async () => {
@@ -351,6 +519,7 @@ function Install({
           ? { app: choice.app.id, widget: choice.widget.id, base: base.trim() }
           : { general: choice.template.id }),
         secret: secretValue,
+        useKnown: useKnown || undefined,
         params: values,
         title,
         audience,
@@ -416,8 +585,20 @@ function Install({
           )}
         </Field>
       ) : null}
+      {known ? (
+        <label className="flex items-center gap-2 text-[13.5px]">
+          <input
+            type="checkbox"
+            checked={useKnown}
+            onChange={(e) => setUseKnown(e.target.checked)}
+            className="size-4 accent-accent"
+          />
+          Use the sign-in Hearth already has for {isApp ? choice.app.name : "it"} (from Devices →
+          Setup)
+        </label>
+      ) : null}
       {secret ? (
-        secret.kind === "basic" ? (
+        secret.kind === "basic" || secret.kind === "digest" ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="User name" hint={secret.hint}>
               {(id) => (
@@ -507,5 +688,41 @@ function Install({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Delete a widget for good (the admin's): off every page, and its key with it. Asks twice. */
+function DeleteWidget({ id, name }: { id: string; name: string }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [sure, setSure] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        if (!sure) {
+          setSure(true);
+          return;
+        }
+        try {
+          await api.del(`/api/admin/widgets/${id}`);
+          toast(`${name} is deleted`);
+          await qc.invalidateQueries({ queryKey: keys.home });
+        } catch (e) {
+          toast((e as Error).message, "bad");
+        }
+        setSure(false);
+      }}
+      onBlur={() => setSure(false)}
+      aria-label={sure ? `Really delete ${name}?` : `Delete ${name} for good`}
+      title={sure ? "Press again to delete it from every page" : "Delete it for good"}
+      className={cx(
+        "flex h-8 flex-none items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold",
+        sure ? "bg-bad/15 text-bad" : "text-muted hover:text-bad",
+      )}
+    >
+      <Trash2 className="size-4" />
+      {sure ? "Delete?" : null}
+    </button>
   );
 }

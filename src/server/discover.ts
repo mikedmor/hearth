@@ -9,6 +9,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, Socket } from "node:net";
 import { networkInterfaces } from "node:os";
+import { brotliDecompressSync, constants, gunzipSync, inflateSync } from "node:zlib";
 import { APPS, type AppDef } from "../shared/catalog";
 import { isLocalUrl } from "../shared/config";
 
@@ -46,6 +47,24 @@ export function decodeTitle(s: string): string {
     .trim();
 }
 
+/** A page's text, unpacked when it came compressed (cut short is fine: it's a first look). */
+export function unpack(buf: Buffer, encoding: string): string {
+  const enc = encoding.toLowerCase();
+  try {
+    if (enc.includes("gzip") || (buf[0] === 0x1f && buf[1] === 0x8b))
+      return gunzipSync(buf, { finishFlush: constants.Z_SYNC_FLUSH }).toString("utf8");
+    if (enc.includes("deflate"))
+      return inflateSync(buf, { finishFlush: constants.Z_SYNC_FLUSH }).toString("utf8");
+    if (enc.includes("br"))
+      return brotliDecompressSync(buf, {
+        finishFlush: constants.BROTLI_OPERATION_FLUSH,
+      }).toString("utf8");
+  } catch {
+    // Not what it said it was: read it as it came.
+  }
+  return buf.toString("utf8");
+}
+
 /** GET an address and read a little of it. Follows a redirect or two on the same host. */
 export function probe(url: string, timeoutMs = 3000, hops = 2): Promise<Probe | null> {
   return new Promise((resolve) => {
@@ -74,13 +93,16 @@ export function probe(url: string, timeoutMs = 3000, hops = 2): Promise<Probe | 
             return;
           }
         }
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => {
-          body += chunk;
-          if (body.length > 96_000) res.destroy();
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          size += chunk.length;
+          if (size > 96_000) res.destroy();
         });
-        const done = () =>
+        const done = () => {
+          // Some devices compress whatever was asked (a Prusa printer gzips its page).
+          const body = unpack(Buffer.concat(chunks), String(res.headers["content-encoding"] ?? ""));
           resolve({
             url: u.href,
             status: res.statusCode ?? 0,
@@ -90,6 +112,7 @@ export function probe(url: string, timeoutMs = 3000, hops = 2): Promise<Probe | 
               Object.entries(res.headers).map(([k, v]) => [k, String(v)]),
             ),
           });
+        };
         res.on("end", done);
         res.on("close", done);
       },
@@ -136,9 +159,15 @@ export async function recognise(
   // All at once; the first in catalog order that answers wins.
   const answers = await Promise.all(
     candidates.map(async (a) => {
-      const pr = a.match.probe as { path: string; body: string };
+      const pr = a.match.probe as { path: string; body?: string; header?: string };
       const p = await probe(new URL(pr.path, base).href, 2000, 0);
-      return p !== null && p.status < 400 && p.body.includes(pr.body);
+      if (!p) return false;
+      // A sign-in challenge says what it is too (PrusaLink's "Printer API"), whatever the status.
+      if (pr.header) {
+        const re = new RegExp(pr.header, "i");
+        if (Object.entries(p.headers).some(([k, v]) => re.test(`${k}: ${v}`))) return true;
+      }
+      return pr.body !== undefined && p.status < 400 && p.body.includes(pr.body);
     }),
   );
   return { app: candidates[answers.indexOf(true)] ?? null, title: first.title, reachable: true };

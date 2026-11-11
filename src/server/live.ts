@@ -12,9 +12,12 @@ import type { WidgetHub } from "./widgets/runtime";
 
 export interface LiveDeps {
   hub: WidgetHub;
-  status: () => StatusMap;
+  /** The status this person's page may see (their own links, and the house's). */
+  status: (profile: string | null) => StatusMap;
   /** Who's on the other end, from the upgrade request's cookies. */
   roleOf: (req: IncomingMessage) => Role | null;
+  /** Whose page it is, from the same cookies. */
+  profileOf?: (req: IncomingMessage) => string | null;
   log?: (msg: string) => void;
 }
 
@@ -23,6 +26,8 @@ const MAX_WATCH = 60;
 export class Live {
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   private clients = new Set<WebSocket>();
+  /** Whose page each socket serves, for what status it may see. */
+  private owners = new WeakMap<WebSocket, string | null>();
   private beat: NodeJS.Timeout;
 
   constructor(private deps: LiveDeps) {
@@ -56,6 +61,8 @@ export class Live {
   private connected(ws: WebSocket, req: IncomingMessage) {
     this.clients.add(ws);
     const role = this.deps.roleOf(req);
+    const profile = this.deps.profileOf?.(req) ?? null;
+    this.owners.set(ws, profile);
     let unwatch: (() => void)[] = [];
     const send = (m: LiveServerMessage) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
@@ -64,7 +71,7 @@ export class Live {
     ws.on("pong", () => {
       (ws as WebSocket & { alive?: boolean }).alive = true;
     });
-    send({ type: "status", data: this.deps.status() });
+    send({ type: "status", data: this.deps.status(profile) });
 
     ws.on("message", (raw) => {
       let msg: LiveClientMessage;
@@ -89,6 +96,21 @@ export class Live {
       this.clients.delete(ws);
     });
     ws.on("error", () => ws.terminate());
+  }
+
+  /** New status for every page, each seeing only what's theirs to see. */
+  broadcastStatus(): void {
+    const byProfile = new Map<string | null, string>();
+    for (const ws of this.clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const p = this.owners.get(ws) ?? null;
+      let text = byProfile.get(p);
+      if (text === undefined) {
+        text = JSON.stringify({ type: "status", data: this.deps.status(p) });
+        byProfile.set(p, text);
+      }
+      ws.send(text);
+    }
   }
 
   broadcast(m: LiveServerMessage): void {

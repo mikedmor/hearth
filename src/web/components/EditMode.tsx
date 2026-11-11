@@ -10,12 +10,14 @@ import {
   closestCorners,
   DndContext,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
   KeyboardSensor,
   MeasuringStrategy,
   PointerSensor,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
@@ -23,8 +25,8 @@ import {
 import {
   arrayMove,
   horizontalListSortingStrategy,
-  rectSortingStrategy,
   SortableContext,
+  type SortingStrategy,
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
@@ -37,6 +39,8 @@ import {
   EyeOff,
   GripVertical,
   LayoutGrid,
+  Link2,
+  Link2Off,
   Lock,
   Palette,
   Pencil,
@@ -47,16 +51,30 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { HomeView, PublicProfile, ViewGroup, ViewTile } from "../../shared/api";
+import type { HomeView, PublicProfile, ViewGroup, ViewTile, ViewWidget } from "../../shared/api";
 import type { SectionKind } from "../../shared/config";
 import { api } from "../lib/api";
+import {
+  type BoardItem,
+  boardItems,
+  boardRuns,
+  groupKey,
+  itemWeight,
+  linkTo,
+  type Place,
+  placeAt,
+  runOf,
+  unlink,
+} from "../lib/board";
 import { cx } from "../lib/format";
-import { keys } from "../lib/queries";
+import { keys, useAdminConfig } from "../lib/queries";
+import { WidgetSettings as WidgetSettingsWindow } from "../pages/WidgetsPage";
 import { AdminSignIn } from "./AdminSignIn";
+import { Masonry } from "./Masonry";
 import { TileIcon } from "./Tile";
 import { AccessBadge, type EditTarget } from "./TileEditors";
-import { IconButton, useToast } from "./ui";
-import { WidgetCard } from "./widgets/WidgetCard";
+import { IconButton, Modal, useToast } from "./ui";
+import { DEFAULT_TITLES, WidgetCard } from "./widgets/WidgetCard";
 
 function useSave() {
   const qc = useQueryClient();
@@ -228,30 +246,49 @@ export function EditBar({
 // The launcher while editing
 
 const SECTION = "section:";
+const WIDGET = "widget:";
 const ZONE = "drop:";
+/** A run of linked items, carried whole by its own handle: "run:<first key>". */
+const RUN = "run:";
 
-/** A dragged section only lands on sections; a dragged link only on links and sections' lists. */
+/** A section, widget or run (a block on the page), as opposed to a link. */
+const isBlock = (id: string) =>
+  id.startsWith(SECTION) || id.startsWith(WIDGET) || id.startsWith(RUN);
+/** The drag id of a board item, and back. */
+const dragIdOf = (key: string) =>
+  key.startsWith("w:") ? WIDGET + key.slice(2) : SECTION + key.slice(2);
+const keyOfDrag = (id: string) =>
+  id.startsWith(RUN)
+    ? id.slice(RUN.length)
+    : id.startsWith(WIDGET)
+      ? `w:${id.slice(WIDGET.length)}`
+      : `g:${id.slice(SECTION.length)}`;
+
+/** A dragged section or widget only lands on those; a dragged link only on links and lists. */
+/** Sections and widgets don't move aside while one is carried: a line shows where it goes. */
+const STAY: SortingStrategy = () => null;
+
 const collision: CollisionDetection = (args) => {
-  const section = String(args.active.id).startsWith(SECTION);
+  const block = isBlock(String(args.active.id));
+  // A run's box isn't a place to land: the items in it are.
   const droppableContainers = args.droppableContainers.filter(
-    (c) => String(c.id).startsWith(SECTION) === section,
+    (c) => isBlock(String(c.id)) === block && !String(c.id).startsWith(RUN),
   );
-  return (section ? closestCenter : closestCorners)({ ...args, droppableContainers });
+  if (!block) return closestCorners({ ...args, droppableContainers });
+  // A section or widget lands by what the pointer is over; between them, the nearest.
+  const under = pointerWithin({ ...args, droppableContainers });
+  return under.length ? under : closestCenter({ ...args, droppableContainers });
 };
 
 export function EditLauncher({
   view,
   edit,
-  columns,
+  mixed,
 }: {
   view: HomeView;
   edit: (t: EditTarget) => void;
-  /** `folded`: every section is the same height, so they lie in reading order. */
-  columns: (
-    groups: ViewGroup[],
-    render: (g: ViewGroup) => React.ReactNode,
-    folded: boolean,
-  ) => React.ReactNode;
+  /** Widgets are mixed in with the sections: move both in one order. */
+  mixed?: boolean;
 }) {
   const save = useSave();
   const admin = view.session.admin;
@@ -265,9 +302,36 @@ export function EditLauncher({
   );
   const [cols, setCols] = useState(initial);
   useEffect(() => setCols(initial), [initial]);
-  const initialOrder = useMemo(() => view.groups.map((g) => g.id), [view.groups]);
+  /** Board keys ("g:<section>", "w:<widget>"): sections only, unless widgets are mixed in. */
+  const initialOrder = useMemo(
+    () =>
+      mixed
+        ? boardItems(view.groups, view.widgets, view.board).map((i) => i.key)
+        : view.groups.map((g) => groupKey(g.id)),
+    [mixed, view.groups, view.widgets, view.board],
+  );
   const [order, setOrder] = useState(initialOrder);
   useEffect(() => setOrder(initialOrder), [initialOrder]);
+  /** Board keys linked to the one before them (only when widgets are mixed in). */
+  const [joined, setJoined] = useState(view.joined);
+  useEffect(() => setJoined(view.joined), [view.joined]);
+  const [linking, setLinking] = useState<string | null>(null);
+  /** Save a new order (and links): the sections' order too, when it changed. */
+  const commit = (next: string[], nextJoined: string[]) => {
+    setOrder(next);
+    setJoined(nextJoined);
+    const groups = next.filter((k) => k.startsWith("g:")).map((k) => k.slice(2));
+    if (JSON.stringify(groups) !== JSON.stringify(view.groups.map((g) => g.id)))
+      void save("put", "/api/me/tiles", { groupOrder: groups });
+    if (mixed)
+      void save("put", "/api/me/layout", {
+        sections: view.sections,
+        widgets: view.widgets.map((w) => ({ id: w.id, w: w.w })),
+        board: next,
+        joined: nextJoined,
+      });
+  };
+  const widgetById = useMemo(() => new Map(view.widgets.map((w) => [w.id, w])), [view.widgets]);
   const byId = useMemo(
     () => new Map(view.groups.flatMap((g) => g.tiles).map((t) => [t.id, t])),
     [view.groups],
@@ -294,10 +358,48 @@ export function EditLauncher({
     return mine ? g.canAdd : admin;
   };
 
+  /** Where a section, widget or run being moved would land: before, after, or with another. */
+  const [dropAt, setDropAt] = useState<{ key: string; side: Place } | null>(null);
+  /** What a drag carries: one item, or a whole run by its handle. */
+  const carried = (id: string) =>
+    id.startsWith(RUN) ? runOf(order, joined, keyOfDrag(id)) : [keyOfDrag(id)];
   const onStart = (e: DragStartEvent) => setActive(String(e.active.id));
+  /**
+   * The pointer's place on the item under it decides: its top edge puts it before, its bottom
+   * edge after, and its middle keeps the two together (when widgets are mixed in).
+   */
+  const onMove = (e: DragMoveEvent) => {
+    const id = String(e.active.id);
+    if (!isBlock(id)) return;
+    const target = e.over ? keyOfDrag(String(e.over.id)) : null;
+    if (!e.over || !target || carried(id).includes(target)) {
+      if (dropAt) setDropAt(null);
+      return;
+    }
+    const pointer = e.activatorEvent as PointerEvent;
+    const moved = e.active.rect.current.translated;
+    const y =
+      typeof pointer.clientY === "number"
+        ? pointer.clientY + e.delta.y
+        : moved
+          ? moved.top + moved.height / 2
+          : e.over.rect.top;
+    const at = (y - e.over.rect.top) / Math.max(1, e.over.rect.height);
+    const side: Place = mixed
+      ? at < 0.28
+        ? "before"
+        : at > 0.72
+          ? "after"
+          : "join"
+      : at < 0.5
+        ? "before"
+        : "after";
+    if (dropAt?.key !== target || dropAt.side !== side) setDropAt({ key: target, side });
+  };
   const onOver = (e: DragOverEvent) => {
     const id = String(e.active.id);
-    if (id.startsWith(SECTION) || !e.over) return;
+    if (isBlock(id)) return;
+    if (!e.over) return;
     const from = groupOf(id);
     const to = groupOf(String(e.over.id));
     if (!from || !to || from === to || !mayGo(id, to)) return;
@@ -312,14 +414,26 @@ export function EditLauncher({
   const onEnd = (e: DragEndEvent) => {
     const id = String(e.active.id);
     setActive(null);
-    if (id.startsWith(SECTION)) {
-      const over = e.over ? String(e.over.id).slice(SECTION.length) : null;
-      const from = order.indexOf(id.slice(SECTION.length));
-      const to = over ? order.indexOf(over) : -1;
-      if (from === -1 || to === -1 || from === to) return;
-      const next = arrayMove(order, from, to);
-      setOrder(next);
-      void save("put", "/api/me/tiles", { groupOrder: next });
+    setDropAt(null);
+    if (isBlock(id)) {
+      if (!dropAt || !e.over) return;
+      const r = mixed
+        ? placeAt(order, joined, carried(id), dropAt.key, dropAt.side)
+        : {
+            order: placeAt(
+              order,
+              [],
+              carried(id),
+              dropAt.key,
+              dropAt.side === "join" ? "after" : dropAt.side,
+            ).order,
+            joined,
+          };
+      if (
+        JSON.stringify(r.order) !== JSON.stringify(order) ||
+        JSON.stringify([...r.joined].sort()) !== JSON.stringify([...joined].sort())
+      )
+        commit(r.order, r.joined);
       return;
     }
     const g = groupOf(id);
@@ -339,23 +453,78 @@ export function EditLauncher({
       favorites: favorites.includes(id) ? favorites.filter((x) => x !== id) : [...favorites, id],
     });
 
-  const ordered = order.map((id) => groupById.get(id)).filter((g): g is ViewGroup => !!g);
+  const items = order
+    .map((k): BoardItem | null => {
+      const id = k.slice(2);
+      if (k.startsWith("w:")) {
+        const widget = widgetById.get(id);
+        return widget ? { key: k, kind: "widget", widget } : null;
+      }
+      const group = groupById.get(id);
+      return group ? { key: k, kind: "group", group } : null;
+    })
+    .filter((x): x is BoardItem => !!x);
+  const runs = (mixed ? boardRuns(items, joined) : items.map((i) => [i])).map((r) =>
+    r.map((i) => i.key),
+  );
+  const runItems = mixed ? boardRuns(items, joined) : items.map((i) => [i]);
+  const nameOf = (i: BoardItem) =>
+    i.kind === "group" ? i.group.name : (i.widget.title ?? DEFAULT_TITLES[i.widget.type]);
+  const linkButton = (key: string, name: string) => {
+    if (!mixed) return undefined;
+    const run = runs.find((r) => r.includes(key)) ?? [];
+    const held = run.indexOf(key) > 0;
+    return held ? (
+      <IconButton
+        label={`Let ${name} go its own way`}
+        title="Linked to the one above: press to unlink"
+        className="size-7 text-accent"
+        onClick={() => commit(order, unlink(joined, key))}
+      >
+        <Link2Off className="size-3.5" />
+      </IconButton>
+    ) : (
+      <IconButton
+        label={`Keep ${name} next to…`}
+        className="size-7"
+        onClick={() => setLinking(key)}
+      >
+        <Link2 className="size-3.5" />
+      </IconButton>
+    );
+  };
   const activeSection = active?.startsWith(SECTION)
     ? groupById.get(active.slice(SECTION.length))
     : undefined;
-  const activeTile = active && !activeSection ? byId.get(active) : undefined;
+  const activeWidget = active?.startsWith(WIDGET)
+    ? widgetById.get(active.slice(WIDGET.length))
+    : undefined;
+  const activeRun = active?.startsWith(RUN)
+    ? items.filter((i) => carried(active).includes(i.key))
+    : undefined;
+  // Everything keeps its size while a section or widget moves; a line shows where it lands.
+  const folded = false;
+  const activeTile = active && !folded ? byId.get(active) : undefined;
+  const removeWidget = (id: string) =>
+    save("put", "/api/me/layout", {
+      sections: view.sections,
+      widgets: view.widgets.filter((w) => w.id !== id).map((w) => ({ id: w.id, w: w.w })),
+      board: order.filter((k) => k !== `w:${id}`),
+    });
 
+  const hintFor = (key: string) => (dropAt?.key === key ? dropAt.side : undefined);
   const render = (g: ViewGroup) => (
     <EditSection
       key={g.id}
       group={g}
+      hint={hintFor(groupKey(g.id))}
       tiles={(cols[g.id] ?? [])
         .map((id) => byId.get(id))
         .filter((t): t is ViewTile => t !== undefined)}
       people={view.profiles}
       canStar={view.profile !== null}
       favorites={favorites}
-      folded={!!activeSection}
+      folded={folded}
       dropOk={activeTile ? mayGo(activeTile.id, g.id) : true}
       edit={edit}
       onHide={() =>
@@ -368,6 +537,7 @@ export function EditLauncher({
       }
       onHideTile={(id) => save("put", "/api/me/tiles", { hiddenTiles: [...view.hiddenTiles, id] })}
       onStar={toggleFav}
+      link={linkButton(groupKey(g.id), g.name)}
     />
   );
 
@@ -376,18 +546,55 @@ export function EditLauncher({
       sensors={sensors}
       collisionDetection={collision}
       onDragStart={onStart}
+      onDragMove={onMove}
       onDragOver={onOver}
       onDragEnd={onEnd}
       onDragCancel={() => {
         setActive(null);
+        setDropAt(null);
         setCols(initial);
       }}
       // Sections fold up when one is picked up, so measure where they are as they move.
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
     >
-      <SortableContext items={order.map((id) => SECTION + id)} strategy={rectSortingStrategy}>
-        {ordered.length ? (
-          columns(ordered, render, !!activeSection)
+      <SortableContext
+        items={[
+          ...order.map(dragIdOf),
+          ...runItems.filter((r) => r.length > 1).map((r) => RUN + r[0]?.key),
+        ]}
+        strategy={STAY}
+      >
+        {items.length ? (
+          <Masonry
+            items={runItems}
+            minWidth={mixed ? 280 : 240}
+            weight={(run) =>
+              run.reduce((n, i) => n + itemWeight(i, (g) => g.tiles.length + 1.5), 0)
+            }
+            render={(run) => {
+              const one = (i: BoardItem) =>
+                i.kind === "group" ? (
+                  render(i.group)
+                ) : (
+                  <EditWidget
+                    key={i.key}
+                    widget={i.widget}
+                    hint={hintFor(i.key)}
+                    folded={folded}
+                    onRemove={() => removeWidget(i.widget.id)}
+                    link={linkButton(i.key, nameOf(i))}
+                    admin={admin}
+                  />
+                );
+              return run.length === 1 ? (
+                one(run[0] as BoardItem)
+              ) : (
+                <RunBox key={run[0]?.key} id={RUN + run[0]?.key} names={run.map(nameOf)}>
+                  {run.map(one)}
+                </RunBox>
+              );
+            }}
+          />
         ) : (
           <p className="card p-6 text-center text-muted">
             No sections yet. {admin || view.canAddOwn ? "Add one with + Section" : ""}
@@ -395,7 +602,31 @@ export function EditLauncher({
           </p>
         )}
       </SortableContext>
+      {linking ? (
+        <LinkPicker
+          name={nameOf(items.find((i) => i.key === linking) as BoardItem)}
+          choices={runItems
+            .filter((r) => !r.some((i) => i.key === linking))
+            .map((r) => ({
+              key: r.at(-1)?.key as string,
+              label: r.map(nameOf).join(" + "),
+              kind: r.length > 1 ? "together" : (r[0]?.kind ?? "group"),
+            }))}
+          onPick={(target) => {
+            const r = linkTo(order, joined, linking, target);
+            commit(r.order, r.joined);
+            setLinking(null);
+          }}
+          onClose={() => setLinking(null)}
+        />
+      ) : null}
       <DragOverlay>
+        {activeRun?.length ? (
+          <div className="card flex h-10 items-center gap-2 px-3 text-[11.5px] font-bold uppercase tracking-[0.09em] shadow-2xl">
+            <Link2 className="size-4 text-accent" />
+            <span className="truncate">{activeRun.map(nameOf).join(" + ")}</span>
+          </div>
+        ) : null}
         {activeTile ? <Row tile={activeTile} people={view.profiles} overlay /> : null}
         {activeSection ? (
           <div className="card flex h-10 items-center gap-2 px-3 text-[11.5px] font-bold uppercase tracking-[0.09em] shadow-2xl">
@@ -403,8 +634,228 @@ export function EditLauncher({
             <span className="ml-auto font-semibold text-muted">{activeSection.tiles.length}</span>
           </div>
         ) : null}
+        {activeWidget ? (
+          <div className="card flex h-10 items-center gap-2 px-3 text-[11.5px] font-bold uppercase tracking-[0.09em] shadow-2xl">
+            <GripVertical className="size-4 text-muted" /> {activeWidget.title ?? "Widget"}
+            <span className="ml-auto font-semibold normal-case tracking-normal text-muted">
+              widget
+            </span>
+          </div>
+        ) : null}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+/** A widget's settings (the admin's): its name, who sees it, its options, and its designer. */
+function WidgetSettings({ widget }: { widget: ViewWidget }) {
+  const config = useAdminConfig();
+  const [open, setOpen] = useState(false);
+  const full = config.data?.config.widgets.find((w) => w.id === widget.id);
+  const name = widget.title ?? DEFAULT_TITLES[widget.type];
+  return (
+    <>
+      <IconButton
+        label={`${name}: settings`}
+        className="size-7"
+        disabled={!full}
+        onClick={() => setOpen(true)}
+      >
+        <Settings2 className="size-3.5" />
+      </IconButton>
+      {open && full ? (
+        <WidgetSettingsWindow
+          widget={full}
+          onClose={() => setOpen(false)}
+          taken={(config.data?.config.widgets ?? []).map((w) => w.id)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** Pick what a section or widget stays next to. */
+function LinkPicker({
+  name,
+  choices,
+  onPick,
+  onClose,
+}: {
+  name: string;
+  choices: { key: string; label: string; kind: "group" | "widget" | "together" }[];
+  onPick: (key: string) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const shown = choices.filter((c) => c.label.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <Modal open onClose={onClose} title={`Keep ${name} next to…`}>
+      <div className="grid gap-3">
+        <p className="text-[13px] text-muted">
+          They'll move as one and stay together on every screen, a phone too. Unlink them any time
+          with the same button.
+        </p>
+        <input
+          aria-label="Find a section or widget"
+          placeholder="Find a section or widget"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="h-10 rounded-xl border border-line bg-surface px-3 text-[14px]"
+        />
+        <ul className="grid max-h-[50vh] gap-1 overflow-y-auto">
+          {shown.map((c) => (
+            <li key={c.key}>
+              <button
+                type="button"
+                onClick={() => onPick(c.key)}
+                className="flex w-full items-center gap-2 rounded-xl border border-line px-3 py-2 text-left hover:border-accent"
+              >
+                {c.kind === "together" ? (
+                  <Link2 className="size-4 flex-none text-accent" />
+                ) : c.kind === "widget" ? (
+                  <LayoutGrid className="size-4 flex-none text-muted" />
+                ) : (
+                  <Settings2 className="size-4 flex-none text-muted" />
+                )}
+                <span className="truncate font-semibold">{c.label}</span>
+                <span className="ml-auto flex-none text-[12px] text-muted">
+                  {c.kind === "together" ? "linked" : c.kind === "widget" ? "widget" : "section"}
+                </span>
+              </button>
+            </li>
+          ))}
+          {shown.length ? null : (
+            <li className="px-1 text-[13px] text-muted">Nothing called that.</li>
+          )}
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
+/** A run of linked items: a dashed box, carried whole by the handle on its edge. */
+function RunBox({
+  id,
+  names,
+  children,
+}: {
+  id: string;
+  names: string[];
+  children: React.ReactNode;
+}) {
+  const sortable = useSortable({ id });
+  return (
+    <div
+      ref={sortable.setNodeRef}
+      className={cx(
+        "relative mb-(--gap) rounded-2xl outline-2 outline-offset-4 outline-accent/45 outline-dashed transition-opacity [&>*:last-child]:mb-0",
+        sortable.isDragging && "opacity-35",
+      )}
+    >
+      <button
+        type="button"
+        ref={sortable.setActivatorNodeRef}
+        {...sortable.listeners}
+        {...sortable.attributes}
+        aria-label={`Move ${names.join(" + ")} together`}
+        title="Drag to move these together"
+        className="absolute -top-3.5 left-1/2 z-10 flex h-5 -translate-x-1/2 cursor-grab touch-none items-center gap-1 rounded-full border border-accent/50 bg-(--c-surface) px-2 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent active:cursor-grabbing"
+      >
+        <GripVertical className="size-3" /> Together
+      </button>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Where a section or widget being carried will land: a bright line above or below this one, or
+ * "keep together" over its middle.
+ */
+function DropLine({ hint }: { hint?: Place }) {
+  if (!hint) return null;
+  if (hint === "join")
+    return (
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-(--radius) bg-accent/10 ring-2 ring-accent"
+      >
+        <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white shadow-lg">
+          <Link2 className="size-3.5" /> Keep together
+        </span>
+      </span>
+    );
+  return (
+    <span
+      aria-hidden
+      className={cx(
+        "pointer-events-none absolute inset-x-1 z-10 h-1 rounded-full bg-accent shadow-[0_0_0_3px_var(--c-accent-soft)]",
+        hint === "before"
+          ? "-top-[calc(var(--gap)/2_+_2px)]"
+          : "-bottom-[calc(var(--gap)/2_+_2px)]",
+      )}
+    />
+  );
+}
+
+/** A widget among the sections: drag it by its handle; while anything moves, only its title shows. */
+function EditWidget({
+  widget,
+  folded,
+  hint,
+  onRemove,
+  link,
+  admin,
+}: {
+  widget: ViewWidget;
+  folded: boolean;
+  hint?: Place;
+  onRemove: () => void;
+  /** Keep it next to another, or let it go (widgets mixed in with the sections). */
+  link?: React.ReactNode;
+  /** The admin may change the widget itself. */
+  admin?: boolean;
+}) {
+  const sortable = useSortable({ id: WIDGET + widget.id });
+  return (
+    <div
+      ref={sortable.setNodeRef}
+      className={cx("relative mb-(--gap) transition-opacity", sortable.isDragging && "opacity-35")}
+    >
+      <DropLine hint={hint} />
+      {folded ? (
+        <div
+          {...sortable.listeners}
+          {...sortable.attributes}
+          className="card flex h-10 cursor-grab items-center gap-2 px-3 text-[11.5px] font-bold uppercase tracking-[0.09em] text-muted"
+        >
+          <GripVertical className="size-4" /> {widget.title ?? "Widget"}
+        </div>
+      ) : (
+        <WidgetCard
+          widget={widget}
+          actions={
+            <>
+              {admin ? <WidgetSettings widget={widget} /> : null}
+              {link}
+              <IconButton label="Take off this page" className="size-7" onClick={onRemove}>
+                <X className="size-4" />
+              </IconButton>
+              <button
+                type="button"
+                aria-label={`Move ${widget.title ?? "this widget"}`}
+                ref={sortable.setActivatorNodeRef}
+                {...sortable.listeners}
+                {...sortable.attributes}
+                className="grid size-7 cursor-grab touch-none place-items-center rounded-full text-muted hover:text-ink active:cursor-grabbing"
+              >
+                <GripVertical className="size-4" />
+              </button>
+            </>
+          }
+        />
+      )}
+    </div>
   );
 }
 
@@ -418,10 +869,14 @@ function EditSection(props: {
   folded: boolean;
   /** The link being dragged may come here. */
   dropOk: boolean;
+  /** A section or widget being moved would land just before or after this one. */
+  hint?: Place;
   edit: (t: EditTarget) => void;
   onHide: () => void;
   onHideTile: (id: string) => void;
   onStar: (id: string) => void;
+  /** Keep it next to another, or let it go (widgets mixed in with the sections). */
+  link?: React.ReactNode;
 }) {
   const { group, tiles, edit, people } = props;
   const sortable = useSortable({ id: SECTION + group.id });
@@ -430,17 +885,14 @@ function EditSection(props: {
   return (
     <section
       ref={sortable.setNodeRef}
-      style={{
-        transform: CSS.Translate.toString(sortable.transform),
-        transition: sortable.transition,
-      }}
       className={cx(
-        "card launcher-group mb-(--gap) p-2",
+        "card launcher-group relative mb-(--gap) p-2 transition-opacity",
         zone.isOver && props.dropOk && "ring-2 ring-accent",
-        // Where the section will land.
-        sortable.isDragging && "border-2 border-dashed border-accent bg-accent/5 [&>*]:invisible",
+        // The one being carried stays where it was, faded, until it's dropped.
+        sortable.isDragging && "opacity-35",
       )}
     >
+      <DropLine hint={props.hint} />
       {/* The whole title bar picks the section up; the handle is also how keys move it. The
           name keeps its width; the controls wrap under it when the column is narrow. */}
       <header
@@ -488,6 +940,7 @@ function EditSection(props: {
               <Settings2 className="size-3.5" />
             </IconButton>
           ) : null}
+          {props.link}
           <IconButton
             label={`Hide ${group.name} from my page`}
             className="size-7"
@@ -700,7 +1153,7 @@ function DockItem({ tile, onRemove }: { tile: ViewTile; onRemove: () => void }) 
         } as React.CSSProperties
       }
       className={cx(
-        "dock-item relative flex w-[84px] flex-none cursor-grab touch-none flex-col items-center gap-1.5 rounded-2xl px-1 py-2 text-center active:cursor-grabbing",
+        "dock-item relative flex w-21 flex-none cursor-grab touch-none flex-col items-center gap-1.5 rounded-2xl px-1 py-2 text-center active:cursor-grabbing",
         isDragging && "z-10 opacity-70",
       )}
       {...attributes}
@@ -755,6 +1208,7 @@ export function EditRail({ view, onAdd }: { view: HomeView; onAdd: () => void })
                   widget={w}
                   actions={
                     <>
+                      {view.session.admin ? <WidgetSettings widget={w} /> : null}
                       <IconButton
                         label="Take off this page"
                         className="size-7"

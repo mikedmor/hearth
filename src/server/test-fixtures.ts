@@ -30,7 +30,7 @@ export function fixtureInput(overrides: Record<string, unknown> = {}): Record<st
       {
         id: "gg",
         name: "Gaseous Games",
-        url: "https://gg.home",
+        url: "https://games.home",
         group: "everyday",
         keywords: ["roms"],
       },

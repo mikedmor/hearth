@@ -24,6 +24,8 @@ export default defineConfig({
       "/api/": { target: server, changeOrigin: false },
       "/icons/": { target: server, changeOrigin: false },
       "/media/": { target: server, changeOrigin: false },
+      // The certificate downloads (the page itself, /trust, is the app's).
+      "/trust/": { target: server, changeOrigin: false },
     },
   },
 });

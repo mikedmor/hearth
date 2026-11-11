@@ -9,6 +9,7 @@
  * radius, density, tile and icon style, fonts, and their own CSS.
  */
 import { z } from "zod";
+import { ENGINE_IDS } from "./web-search";
 
 export const HEX = /^#[0-9a-fA-F]{6}$/;
 const hex = z.string().regex(HEX, "use a colour like #e8743b");
@@ -268,7 +269,7 @@ export const TILE_SIZES = ["sm", "md", "lg"] as const;
 export const CLOCKS = ["big", "small", "off"] as const;
 export const WIDTHS = ["narrow", "normal", "wide", "full"] as const;
 export const LAYOUTS = ["command", "classic"] as const;
-export const RAILS = ["right", "left", "off"] as const;
+export const RAILS = ["mixed", "right", "left", "off"] as const;
 export const RAIL_WIDTHS = ["narrow", "wide"] as const;
 export const LAUNCHERS = ["rows", "icons", "cards"] as const;
 
@@ -290,7 +291,8 @@ export const LookSchema = z.object({
    */
   layout: z.enum(LAYOUTS).default("command"),
   /** Where the widget rail goes in the command layout. */
-  rail: z.enum(RAILS).default("right"),
+  /** Widgets mixed in with the sections (the default), or in a rail at one side, or off. */
+  rail: z.enum(RAILS).default("mixed"),
   railWidth: z.enum(RAIL_WIDTHS).default("narrow"),
   /** How groups of tiles look in the command layout: one-line rows, an icon grid, or cards. */
   launcher: z.enum(LAUNCHERS).default("rows"),
@@ -321,6 +323,8 @@ export const LookSchema = z.object({
   clock: z.enum(CLOCKS).default("big"),
   greeting: z.boolean().default(true),
   align: z.enum(["left", "center"]).default("left"),
+  /** Searching the web from the search box: the home's engine, one of your own, or off. */
+  search: z.enum(["home", ...ENGINE_IDS, "off"]).default("home"),
   /** Extra CSS for this page, served as a stylesheet (no scripts, no outside requests: CSP). */
   css: z.string().max(20_000).default(""),
 });

@@ -223,7 +223,8 @@ interface Draft {
   startTime: string;
   endDay: string;
   endTime: string;
-  repeat: RepeatKind | "";
+  /** "custom": an imported event's own rule, kept as it is. */
+  repeat: RepeatKind | "" | "custom";
   until: string;
   calendar: string;
   location: string;
@@ -243,7 +244,7 @@ function draftFrom(e: CalEvent): Draft {
     startTime: e.allDay ? "09:00" : timeKey(s),
     endDay: dayKey(new Date(Math.max(last.getTime(), s.getTime()))),
     endTime: e.allDay ? "10:00" : timeKey(end),
-    repeat: e.repeat ?? "",
+    repeat: e.customRepeat ? "custom" : (e.repeat ?? ""),
     until: "",
     calendar: e.source,
     location: e.location ?? "",
@@ -283,8 +284,9 @@ function toInput(d: Draft): EventInput {
     timeZone: localZone(),
     location: d.location.trim() || undefined,
     notes: d.notes.trim() || undefined,
-    repeat: d.repeat || undefined,
-    until: d.repeat && d.until ? d.until : undefined,
+    repeat: d.repeat && d.repeat !== "custom" ? d.repeat : undefined,
+    until: d.repeat && d.repeat !== "custom" && d.until ? d.until : undefined,
+    keepRule: d.repeat === "custom" ? true : undefined,
     people: d.people,
   };
 }
@@ -474,8 +476,9 @@ export function EventEditor({
                 <Select
                   id={id}
                   value={d.repeat}
-                  onChange={(e) => set("repeat", e.target.value as RepeatKind | "")}
+                  onChange={(e) => set("repeat", e.target.value as Draft["repeat"])}
                 >
+                  {event?.customRepeat ? <option value="custom">As it was imported</option> : null}
                   <option value="">Doesn't repeat</option>
                   {(Object.keys(REPEAT_WORDS) as RepeatKind[]).map((r) => (
                     <option key={r} value={r}>
@@ -485,7 +488,7 @@ export function EventEditor({
                 </Select>
               )}
             </Field>
-            {d.repeat ? (
+            {d.repeat && d.repeat !== "custom" ? (
               <Field label="Until" hint="Leave empty to keep going">
                 {(id) => (
                   <Input
@@ -562,7 +565,7 @@ export function EventEditor({
               value={d.notes}
               onChange={(e) => set("notes", e.target.value)}
               maxLength={4000}
-              className="min-h-16 w-full rounded-xl border border-line bg-(--c-background) px-3 py-2 text-[14px] text-ink focus:border-accent focus:ring-4 focus:ring-(--c-accent-soft) focus:outline-none"
+              className="min-h-16 w-full rounded-xl border border-line bg-page px-3 py-2 text-[14px] text-ink focus:border-accent focus:ring-4 focus:ring-(--c-accent-soft) focus:outline-none"
             />
           )}
         </Field>

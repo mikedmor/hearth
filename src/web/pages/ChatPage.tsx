@@ -1,6 +1,6 @@
 /** Chat with the home's AI servers. Conversations stay in this browser, per person. */
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowUp, Cpu, MessageSquarePlus, Square, Trash2 } from "lucide-react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { ArrowUp, MessageSquarePlus, Square, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatEvent, ChatMessage } from "../../shared/api";
 import { Answer } from "../components/Markdown";
@@ -222,12 +222,6 @@ export function ChatPage() {
             models={serverInfo?.models ?? []}
             className="h-9 w-44 text-[14px]"
           />
-          <Link
-            to="/compute"
-            className="ml-auto flex items-center gap-1 text-[12.5px] font-semibold text-muted hover:text-ink"
-          >
-            <Cpu className="size-4" /> Computers
-          </Link>
           <Button size="sm" className="md:hidden" onClick={() => setActiveId(null)}>
             New
           </Button>
@@ -257,7 +251,7 @@ export function ChatPage() {
                         ? "bg-accent text-white"
                         : t.error
                           ? "border border-bad/30 bg-bad/10"
-                          : "bg-[var(--c-surface-2)]",
+                          : "bg-(--c-surface-2)",
                     )}
                   >
                     {t.role === "assistant" &&
@@ -307,14 +301,14 @@ export function ChatPage() {
             rows={1}
             placeholder={servers.data?.length ? "Message…" : "No AI servers yet"}
             aria-label="Message"
-            className="max-h-48 min-h-11 grow resize-none rounded-xl border border-line bg-[var(--c-background)] px-3 py-2.5 text-[15px] focus:border-accent focus:outline-none [field-sizing:content]"
+            className="max-h-48 min-h-11 grow resize-none rounded-xl border border-line bg-page px-3 py-2.5 text-[15px] focus:border-accent focus:outline-none field-sizing-content"
           />
           {busy ? (
             <button
               type="button"
               onClick={() => abort.current?.abort()}
               aria-label="Stop"
-              className="grid size-11 place-items-center rounded-xl bg-ink text-[var(--c-background)]"
+              className="grid size-11 place-items-center rounded-xl bg-ink text-page"
             >
               <Square className="size-4 fill-current" />
             </button>

@@ -156,3 +156,89 @@ describe("resolveDoc", () => {
     expect(blocks[5]).toMatchObject({ src: null });
   });
 });
+
+describe("charts from Muny's card kit", () => {
+  const input = {
+    sources: {
+      days: [
+        { day: "2026-11-01", up: 3, down: 1, weekday: "Mon", hour: 9 },
+        { day: "2026-11-02", up: 5, down: 0, weekday: "Tue", hour: 10 },
+      ],
+    },
+    history: {},
+    locale: "en-US",
+    timeZone: "UTC",
+    now: () => Date.parse("2026-11-11T12:00:00Z"),
+  };
+
+  it("turns a list into columns and rows, with what each column is", () => {
+    const { doc, issues } = checkDoc({
+      v: 1,
+      sources: [{ id: "days", kind: "http", url: "http://192.168.1.20/days" }],
+      blocks: [
+        {
+          id: "c",
+          kind: "columns",
+          items: "$days",
+          x: "$item.day",
+          series: [
+            { label: "Up", value: "$item.up", color: "positive" },
+            { label: "Down", value: "$item.down", mark: "line" },
+          ],
+          stacked: true,
+        },
+        {
+          id: "h",
+          kind: "heatmap",
+          items: "$days",
+          x: "$item.hour",
+          y: "$item.weekday",
+          series: [{ label: "Up", value: "$item.up" }],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    const [c, h] = resolveDoc(doc as NonNullable<typeof doc>, input);
+    expect(c).toMatchObject({
+      kind: "columns",
+      options: { stacked: true },
+      query: {
+        columns: [
+          { id: "x", type: "date", role: "dimension" },
+          { id: "s0", label: "Up", role: "measure", color: "positive", mark: "column" },
+          { id: "s1", label: "Down", role: "measure", mark: "line" },
+        ],
+        rows: [
+          ["2026-11-01", 3, 1],
+          ["2026-11-02", 5, 0],
+        ],
+      },
+    });
+    expect(h).toMatchObject({
+      kind: "heatmap",
+      query: {
+        columns: [{ id: "x", type: "number" }, { id: "y", type: "text" }, { id: "s0" }],
+        rows: [
+          [9, "Mon", 3],
+          [10, "Tue", 5],
+        ],
+      },
+    });
+  });
+
+  it("checks a chart's formulas", () => {
+    const { issues } = checkDoc({
+      v: 1,
+      blocks: [
+        {
+          id: "p",
+          kind: "pie",
+          items: "$x",
+          x: "$item.name",
+          series: [{ label: "Size", value: "$item.(" }],
+        },
+      ],
+    });
+    expect(issues.map((i) => i.path)).toContain("blocks.0.series.0.value");
+  });
+});

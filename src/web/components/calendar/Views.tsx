@@ -114,7 +114,7 @@ export function MonthView({
               }
               onKeyDown={() => {}}
               className={cx(
-                "group relative flex min-h-[92px] min-w-0 flex-col gap-0.5 border-line p-1 sm:min-h-[112px]",
+                "group relative flex min-h-23 min-w-0 flex-col gap-0.5 border-line p-1 sm:min-h-28",
                 i % 7 !== 6 && "border-r",
                 i < 35 && "border-b",
                 !inMonth && "bg-(--c-surface-2)/40",
@@ -304,7 +304,7 @@ export function WeekView({ start, days = 7, ...p }: ViewProps & { start: Date; d
                 className={cx(
                   "relative border-l border-line",
                   p.onNew && "cursor-pointer",
-                  isToday && "bg-accent/[0.04]",
+                  isToday && "bg-accent/4",
                 )}
                 style={{
                   backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${HOUR - 1}px, var(--c-line) ${HOUR - 1}px, var(--c-line) ${HOUR}px)`,

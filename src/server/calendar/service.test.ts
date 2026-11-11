@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GOOGLE_CLIENT_SECRET, secretOf } from "../../shared/calendar";
 import { type Profile, ProfileSchema, SettingsSchema } from "../../shared/config";
 import { SecretStore } from "../secrets";
+import { occurrences } from "./ics";
 import { CalendarService, expandHearth } from "./service";
 import { CalendarStore } from "./store";
 
@@ -495,6 +496,8 @@ describe("Google", () => {
           { id: "gone", status: "cancelled" },
         ],
       });
+    if (url.pathname.endsWith("/events/import") && method === "POST")
+      return Response.json({ id: "imported", ...JSON.parse(body) });
     if (url.pathname.endsWith("/events") && method === "POST")
       return Response.json({ id: "new-1", ...JSON.parse(body) });
     return new Response("", { status: 404 });
@@ -560,6 +563,48 @@ describe("Google", () => {
     expect(renewed.calendars.map((c) => c.added)).toEqual([true, false]);
   });
 
+  it("imports a file into a Google calendar, by the file's own ids", async () => {
+    const { service, store, calls } = await setup({
+      internet: true,
+      google: true,
+      handler: google,
+    });
+    const { url } = service.googleStart(alex);
+    const state = new URL(url).searchParams.get("state");
+    const { account, calendars } = await service.googleFinish(
+      alex,
+      `?state=${state}&code=good-code`,
+    );
+    await service.addFromAccount(alex, account.id, calendars.slice(0, 1));
+    const cal = store.get().calendars.find((c) => c.kind === "google")?.id as string;
+    const file = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:club",
+      "DTSTART;TZID=America/New_York:20261103T180000",
+      "DTEND;TZID=America/New_York:20261103T190000",
+      "RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261124T230000Z",
+      "EXDATE;TZID=America/New_York:20261110T180000",
+      "SUMMARY:Chess club",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const done = await service.importIcs(alex, {
+      calendar: cal,
+      ics: file,
+      timeZone: "UTC",
+      dryRun: false,
+    });
+    expect(done.added).toBe(1);
+    const sent = JSON.parse(calls.find((c) => c.url.endsWith("/events/import"))?.body ?? "{}");
+    expect(sent).toMatchObject({
+      iCalUID: "club",
+      summary: "Chess club",
+      start: { dateTime: "2026-11-03T23:00:00.000Z", timeZone: "America/New_York" },
+      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261124T230000Z", "EXDATE:20261110T230000Z"],
+    });
+  });
+
   it("comes back through a return page, to the address Hearth was opened at", async () => {
     const page = "https://you.github.io/hearth-public/google/";
     const { service, calls } = await setup({
@@ -591,5 +636,150 @@ describe("Google", () => {
     expect(() => noClient.googleStart(alex)).toThrow(/hasn't set up Google/);
     const noInternet = (await setup({ google: true })).service;
     expect(() => noInternet.googleStart(alex)).toThrow(/can't reach the internet/);
+  });
+});
+
+describe("importing and downloading", () => {
+  const FILE = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VEVENT",
+    "UID:club",
+    "DTSTART;TZID=America/New_York:20261103T180000",
+    "DTEND;TZID=America/New_York:20261103T190000",
+    "RRULE:FREQ=WEEKLY;BYDAY=TU,TH;COUNT=6",
+    "EXDATE;TZID=America/New_York:20261105T180000",
+    "SUMMARY:Chess club",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:club",
+    "RECURRENCE-ID;TZID=America/New_York:20261110T180000",
+    "DTSTART;TZID=America/New_York:20261110T200000",
+    "DTEND;TZID=America/New_York:20261110T210000",
+    "SUMMARY:Chess club (late)",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:club",
+    "RECURRENCE-ID;TZID=America/New_York:20261112T180000",
+    "STATUS:CANCELLED",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:fair",
+    "DTSTART;VALUE=DATE:20261121",
+    "DTEND;VALUE=DATE:20261123",
+    "SUMMARY:School fair",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  const times = (v: { events: { title: string; start: string }[] }) =>
+    v.events.map((e) => [e.title, e.start]);
+
+  it("brings a file into a new calendar exactly as the file has it, once", async () => {
+    const { service } = await setup();
+    const look = await service.importIcs(alex, {
+      newCalendar: { name: "Chess", color: "#2f9e44" },
+      ics: FILE,
+      timeZone: "America/New_York",
+      dryRun: true,
+    });
+    expect(look).toMatchObject({
+      events: 2,
+      repeating: 1,
+      changedTimes: 2,
+      added: 0,
+      first: "2026-11-03",
+    });
+    const done = await service.importIcs(alex, {
+      newCalendar: { name: "Chess", color: "#2f9e44" },
+      ics: FILE,
+      timeZone: "America/New_York",
+      dryRun: false,
+    });
+    expect(done.added).toBe(3);
+    const v = await service.view(alex, ...NOV, true);
+    // Exactly the file's times: six Tuesdays and Thursdays, less one skipped and one cancelled,
+    // one moved to 20:00; and the fair, all day.
+    expect(times(v)).toEqual(
+      times({ events: occurrences(FILE, ...NOV) }).sort((a, b) =>
+        (a[1] as string).localeCompare(b[1] as string),
+      ),
+    );
+    expect(times(v)).toEqual([
+      ["Chess club", "2026-11-03T23:00:00.000Z"],
+      ["Chess club (late)", "2026-11-11T01:00:00.000Z"],
+      ["Chess club", "2026-11-17T23:00:00.000Z"],
+      ["Chess club", "2026-11-19T23:00:00.000Z"],
+      ["School fair", "2026-11-21"],
+    ]);
+    expect(v.events[0]).toMatchObject({ repeating: true, customRepeat: true, canEdit: true });
+
+    // The same file again adds nothing.
+    const again = await service.importIcs(alex, {
+      calendar: done.calendar,
+      ics: FILE,
+      timeZone: "America/New_York",
+      dryRun: false,
+    });
+    expect(again).toMatchObject({ added: 0, duplicates: 3 });
+    expect(times(await service.view(alex, ...NOV, true))).toHaveLength(5);
+  });
+
+  it("keeps an imported rule when every time is changed, and downloads the same times", async () => {
+    const { service } = await setup();
+    const { calendar } = await service.importIcs(alex, {
+      newCalendar: { name: "Chess", color: "#2f9e44" },
+      ics: FILE,
+      timeZone: "America/New_York",
+      dryRun: false,
+    });
+    const v = await service.view(alex, ...NOV, true);
+    const first = v.events.find((e) => e.title === "Chess club") as (typeof v.events)[number];
+    await service.updateEvent(
+      alex,
+      { calendar: calendar as string, ref: first.ref, instance: first.instance, scope: "all" },
+      {
+        ...event(calendar as string, { title: "Chess", start: first.start, end: first.end }),
+        keepRule: true,
+      },
+    );
+    const after = await service.view(alex, ...NOV, true);
+    expect(after.events.filter((e) => e.title === "Chess")).toHaveLength(3);
+
+    const { ics } = service.exportIcs(alex, calendar as string);
+    expect(
+      times({ events: occurrences(ics, ...NOV) }).sort((a, b) =>
+        (a[1] as string).localeCompare(b[1] as string),
+      ),
+    ).toEqual(times(after));
+    // Only Hearth's own calendars download.
+    expect(() => service.exportIcs(sam, calendar as string)).toThrow(/no such calendar/);
+  });
+
+  it("sends a file's events to a CalDAV calendar, once", async () => {
+    const dav = davServer();
+    const { service, store } = await setup({ handler: dav.handler });
+    const { account, calendars } = await service.addCalDav(alex, {
+      url: "http://nas.home:5000/dav/",
+      username: "alex",
+      password: "pw",
+    });
+    await service.addFromAccount(alex, account.id, calendars);
+    const cal = store.get().calendars.find((c) => c.kind === "caldav")?.id as string;
+    const done = await service.importIcs(alex, {
+      calendar: cal,
+      ics: FILE,
+      timeZone: "UTC",
+      dryRun: false,
+    });
+    expect(done).toMatchObject({ added: 2, duplicates: 0 });
+    expect(dav.objects.size).toBe(2);
+    expect([...dav.objects.values()][0]?.ics).toContain("RECURRENCE-ID");
+    const again = await service.importIcs(alex, {
+      calendar: cal,
+      ics: FILE,
+      timeZone: "UTC",
+      dryRun: false,
+    });
+    expect(again).toMatchObject({ added: 0, duplicates: 2 });
   });
 });

@@ -1,6 +1,12 @@
 # Install
 
-Hearth runs as a single Docker container that keeps everything in one data folder, as plain JSON files. It's built from source, on any amd64 or arm64 machine with Docker: a PC, a Raspberry Pi, or a NAS.
+Hearth runs as a single Docker container that keeps everything in one data folder, as plain JSON files. Images for amd64 and arm64 are published on GitHub (`ghcr.io/mikedmor/hearth`), so it runs on a PC, a Raspberry Pi or a NAS.
+
+| Image tag | What you get                                                        |
+| --------- | ------------------------------------------------------------------- |
+| `1`       | The latest 1.x release. Recommended: updates never break your setup |
+| `1.0.0`   | Exactly that version, until you change it                           |
+| `latest`  | The newest release, whatever its version                            |
 
 Every install needs the same three things:
 
@@ -15,8 +21,7 @@ Then open `http://<host>:8082`. The first visit asks for a **setup code**, print
 ```sh
 mkdir -p hearth/data && cd hearth
 chmod 700 data
-git clone https://github.com/mikedmor/hearth.git src
-cp src/docker/compose.yaml .
+curl -fsSLO https://raw.githubusercontent.com/mikedmor/hearth/main/docker/compose.yaml
 umask 077; printf "HEARTH_SECRET_KEY=%s\n" "$(openssl rand -base64 32)" > .env
 id   # note your uid:gid for compose.yaml
 ```
@@ -24,27 +29,35 @@ id   # note your uid:gid for compose.yaml
 Open `compose.yaml` and set `user:` to your uid:gid (it must own `./data`) and `TZ` to your time zone. Then:
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 docker logs hearth   # the setup code for the first visit
 ```
+
+Or with plain `docker run`:
+
+```sh
+docker run -d --name hearth --restart unless-stopped --user "$(id -u):$(id -g)" \
+  -p 8082:8082 --env-file .env -e TZ=America/New_York -v "$PWD/data:/data" ghcr.io/mikedmor/hearth:1
+```
+
+**Building from source** instead: clone the repository into `hearth/src`, and in `compose.yaml` swap the `image:` line for the `build:` lines below it (they're there, commented out). Then `docker compose up -d --build`.
 
 ## Synology NAS (DSM 7, Container Manager)
 
 1. In **File Station**, create the folder `docker/hearth/data`.
 2. **Find your user's ids:** enable SSH (Control Panel → Terminal & SNMP), sign in and run `id`. Note the `uid` and `gid` (often `1026` and `100`).
-3. **Get the code and make the key** over SSH:
+3. **Get the compose file and make the key** over SSH:
 
    ```sh
    cd /volume1/docker/hearth
-   git clone https://github.com/mikedmor/hearth.git src
-   cp src/docker/compose.yaml .
+   curl -fsSLO https://raw.githubusercontent.com/mikedmor/hearth/main/docker/compose.yaml
    umask 077; printf "HEARTH_SECRET_KEY=%s\n" "$(openssl rand -base64 32)" > .env
    ```
 
-   No `git` on the NAS? Download the repository as a ZIP from GitHub and unpack it into `docker/hearth/src` with File Station.
+   Or download [compose.yaml](../docker/compose.yaml) and put it in `docker/hearth` with File Station, and put the key in `.env` beside it.
 
 4. Edit `compose.yaml` (File Station → right-click → Open with Text Editor): set `user:` to your ids from step 2, and `TZ` to your time zone.
-5. In **Container Manager → Project → Create**, choose the path `/docker/hearth`. It finds `compose.yaml`; build and start it.
+5. In **Container Manager → Project → Create**, choose the path `/docker/hearth`. It finds `compose.yaml`; start it.
 6. Open the container's **Log** tab for the setup code, then open `http://NAS_IP:8082`.
 
 Hearth's container is the only thing this touches. Nothing on the NAS is restarted.
@@ -63,7 +76,7 @@ Short links come with the name: `start.home/plex` opens the link called `plex`.
 
 ### HTTPS with your own certificate authority
 
-If your home has its own certificate authority (step-ca, say) and serves `https://start.home` from your reverse proxy, also let Hearth trust it. That way, status checks and widgets can reach other `https://*.home` services. In `compose.yaml`, mount the **public root certificate** read-only and point `NODE_EXTRA_CA_CERTS` at it (both lines are there, commented out). Never give Hearth a private key.
+If your home has its own certificate authority (step-ca, say) and serves `https://start.home` from your reverse proxy, also let Hearth trust it. That way, status checks and widgets can reach other `https://*.home` services. In `compose.yaml`, mount the **public root certificate** read-only and point `NODE_EXTRA_CA_CERTS` at it (both lines are there, commented out). Never give Hearth a private key. The same file feeds [the trust page](trust.md) at `start.home/trust`.
 
 ## Settings
 
@@ -80,10 +93,16 @@ Everything else is set in the page, under **Settings**, by the admin.
 
 ## Updating
 
-```sh
-cd hearth/src && git pull && cd ..
-docker compose up -d --build
-```
+**Settings → General → Updates** shows which version you're running. Turn on **Check for a new version once a day** (or press **Check now**) and Hearth asks GitHub for its newest release: a plain request that sends nothing about your home. When there's a newer one, the admin's **Settings** link gets a dot, and the Updates panel shows what's new and the steps below. Hearth never updates itself: it would need control of Docker for that, and a start page shouldn't have it.
+
+| How you installed it          | To update                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| Docker Compose                | `docker compose pull && docker compose up -d` in Hearth's folder          |
+| Synology Container Manager    | **Project → hearth → Action → Build** (it pulls the newest image)          |
+| `docker run`                  | `docker pull ghcr.io/mikedmor/hearth:1`, then remove and run it again    |
+| Built from source             | `git -C src pull && docker compose up -d --build`                         |
+
+Watchtower and similar tools work too, if you'd rather updates happen by themselves.
 
 Your data folder isn't touched by an update. When a new version changes the configuration's format, Hearth upgrades it the first time it starts and keeps the old file beside it as `hearth.json.v<old version>`.
 

@@ -7,8 +7,10 @@ Everything you need to install, set up and use Hearth. New here? Start with **[I
 | Guide                                    | What it covers                                                                                  |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | [Install](install.md)                    | Docker Compose, Synology, a name like `start.home`, HTTPS, every setting, updating and backups  |
+| [Signing in](sign-in.md)                 | Single sign-on with Pocket ID or another OpenID Connect provider, and your own device opening your page |
 | [Getting started](getting-started.md)    | Your first hour: the admin, people and PINs, sections and links, who sees what, and your look  |
 | [Finding services](finding-services.md)  | Scanning the network, how Hearth recognises apps, teaching it new ones, importing from Heimdall |
+| [The trust page](trust.md)               | `start.home/trust`: getting each device to trust your own certificate authority, and moving to https |
 
 ## Every day
 
@@ -16,7 +18,10 @@ Everything you need to install, set up and use Hearth. New here? Start with **[I
 | --------------------------- | --------------------------------------------------------------------------------------------- |
 | [Widgets](widgets.md)       | Built-in widgets, ready-made ones for your apps, making your own, the AI designer, and keys    |
 | [Calendar](calendar.md)     | Everyone's calendar: Hearth's own, calendar links, CalDAV and Google, sharing and tagging      |
-| [AI](ai.md)                 | Your own AI servers, chat, who may use it, and the AI computers page                           |
+| [Files](files.md)           | The NAS's shared folders, as you: browse, download, and map a share on any device             |
+| [AI](ai.md)                 | Your own AI servers, chat, and who may use it                                                  |
+| [Devices](devices.md)       | Everything on your network: what's on, what runs where, AI computers, pinball tables, alerts, and whose each device is |
+| [Family](internet.md)       | The Family page: what each child can reach, activity, schedules, pause, unlock, parents       |
 
 ## Running Hearth
 

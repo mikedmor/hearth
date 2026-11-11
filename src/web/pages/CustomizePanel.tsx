@@ -19,7 +19,7 @@ import {
   TILE_STYLES,
   WIDTHS,
 } from "../../shared/themes";
-
+import { ENGINE_IDS, SEARCH_ENGINES } from "../../shared/web-search";
 import {
   Button,
   Drawer,
@@ -27,6 +27,7 @@ import {
   Field,
   Input,
   Segmented,
+  Select,
   TextArea,
   Toggle,
   useToast,
@@ -124,7 +125,7 @@ export function CustomizePanel({
           />
           <p className="text-[12.5px] text-muted">
             {look.layout === "command"
-              ? "Everything on one screen: services in the middle, widgets in a side rail, favourites in a dock. On phones, swipe between Apps and Widgets."
+              ? "Everything on one screen: your sections and widgets together (or widgets in a rail at one side), favourites in a dock. On phones, swipe between Apps and Widgets."
               : "One long page of sections, in the order you arrange."}
           </p>
           {look.layout === "command" ? (
@@ -140,16 +141,17 @@ export function CustomizePanel({
                 ]}
               />
               <Segmented
-                label="Widget rail"
+                label="Widgets"
                 value={look.rail}
                 onChange={(v) => update({ rail: v })}
                 options={[
+                  { value: "mixed", label: "Among sections" },
                   { value: "right", label: "Right" },
                   { value: "left", label: "Left" },
                   { value: "off", label: "Off" },
                 ]}
               />
-              {look.rail !== "off" ? (
+              {look.rail === "left" || look.rail === "right" ? (
                 <Segmented
                   label="Rail width"
                   value={look.railWidth}
@@ -324,6 +326,29 @@ export function CustomizePanel({
           />
         </Group>
 
+        <Group title="Search">
+          <Field
+            label="Search the web with"
+            hint="From the search box, when what you type isn't one of the home's links."
+          >
+            {(id) => (
+              <Select
+                id={id}
+                value={look.search}
+                onChange={(e) => update({ search: e.target.value as typeof look.search })}
+              >
+                <option value="home">The home's choice</option>
+                {ENGINE_IDS.map((e) => (
+                  <option key={e} value={e}>
+                    {SEARCH_ENGINES[e].name}
+                  </option>
+                ))}
+                <option value="off">Don't search the web</option>
+              </Select>
+            )}
+          </Field>
+        </Group>
+
         <Group title="Your own CSS">
           <CssEditor value={look.css} onSave={(css) => update({ css })} />
         </Group>
@@ -341,7 +366,7 @@ export function CustomizePanel({
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="grid gap-3">
-      <h3 className="text-[12px] font-bold uppercase tracking-[0.1em] text-muted">{title}</h3>
+      <h3 className="text-[12px] font-bold uppercase tracking-widest text-muted">{title}</h3>
       {children}
     </section>
   );
@@ -366,7 +391,7 @@ function ThemeSwatch({
       aria-pressed={active}
       className={cx(
         "relative overflow-hidden rounded-2xl border-2 text-left transition",
-        active ? "border-accent" : "border-line hover:border-[var(--c-line-strong)]",
+        active ? "border-accent" : "border-line hover:border-(--c-line-strong)",
       )}
     >
       <span className="block h-14 p-2" style={{ background: bg }}>
@@ -413,7 +438,7 @@ function Slider({
         max={max}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="accent-[var(--c-accent)]"
+        className="accent-accent"
       />
     </label>
   );
@@ -442,7 +467,7 @@ function FontPicker({
               "rounded-xl border px-2 py-2 text-[14px] transition",
               value === f
                 ? "border-accent bg-accent/10"
-                : "border-line hover:border-[var(--c-line-strong)]",
+                : "border-line hover:border-(--c-line-strong)",
             )}
             style={{ fontFamily: FONT_STACKS[f] }}
           >

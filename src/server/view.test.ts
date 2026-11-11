@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../shared/api";
-import { canSee, type Tile } from "../shared/config";
+import { canSee, isChecked, statusFor, type Tile } from "../shared/config";
 import type { ConfigError } from "./config-store";
 import { fixture } from "./test-fixtures";
 import { buildHomeView, findProfile, toViewTile } from "./view";
@@ -19,6 +19,22 @@ const view = (cfg: ReturnType<typeof fixture>, id: string | null, s: Partial<Ses
   });
 const tileIds = (v: ReturnType<typeof buildHomeView>) =>
   v.groups.flatMap((g) => g.tiles.map((t) => t.id));
+
+describe("what people can use", () => {
+  it("is by role, the admin always may, and Files starts off for children", () => {
+    const cfg = fixture();
+    const kid = cfg.profiles.find((p) => p.role === "child");
+    const adult = cfg.profiles.find((p) => p.role === "adult");
+    if (!kid || !adult) throw new Error("the fixture needs a child and an adult");
+    const kidView = view(cfg, kid.id);
+    expect(kidView).toMatchObject({ canFiles: false, canCalendar: true });
+    expect(view(cfg, adult.id)).toMatchObject({ canFiles: true, canCalendar: true });
+    expect(view(cfg, kid.id, { admin: true }).canFiles).toBe(true);
+    expect(view(cfg, null)).toMatchObject({ canFiles: false, canCalendar: false });
+    cfg.settings.features.calendar = ["admin", "adult"];
+    expect(view(cfg, kid.id).canCalendar).toBe(false);
+  });
+});
 
 describe("audiences", () => {
   it("match roles", () => {
@@ -180,5 +196,15 @@ describe("toViewTile", () => {
   it("doesn't check internet addresses", () => {
     expect(toViewTile({ ...base, url: "https://www.google.com" }).checked).toBe(false);
     expect(toViewTile(base).checked).toBe(true);
+  });
+});
+
+describe("status of people's own links", () => {
+  it("checks them, and gives their status only to their owner", () => {
+    expect(isChecked({ check: true, url: "http://192.168.1.30" })).toBe(true);
+    const status = { house: "up", mine: "down", theirs: "up" };
+    const tiles = [{ id: "house" }, { id: "mine", owner: "alex" }, { id: "theirs", owner: "sam" }];
+    expect(statusFor(status, tiles, "alex")).toEqual({ house: "up", mine: "down" });
+    expect(statusFor(status, tiles, null)).toEqual({ house: "up" });
   });
 });

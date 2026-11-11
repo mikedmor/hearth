@@ -1,6 +1,5 @@
 # Publishes public-site/ (and only that folder) to GitHub Pages: the home page, privacy policy
-# and return page Google needs for two-way Google Calendar (D-18). The rest of the repo stays
-# private. Pages for a private repo needs a paid GitHub plan.
+# and return page Google needs for two-way Google Calendar.
 name: Public site
 
 on:

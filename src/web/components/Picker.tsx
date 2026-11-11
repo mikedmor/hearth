@@ -1,12 +1,16 @@
 /** "Who's here?", with a PIN pad for locked profiles. */
-import { Delete, Lock } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Delete, KeyRound, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PublicProfile } from "../../shared/api";
-import { api } from "../lib/api";
+import type { PublicProfile, SsoInfo } from "../../shared/api";
+import { api, local } from "../lib/api";
 import { cx } from "../lib/format";
 import { useRefresh } from "../lib/queries";
 import { Button } from "./ui";
+
+/** This device's owner said "not me": their page stops opening by itself here. */
+export const NOT_OWNER = "hearth.not-owner";
 
 export function Avatar({
   p,
@@ -21,7 +25,7 @@ export function Avatar({
       className={cx(
         "inline-grid flex-none place-items-center rounded-full font-bold select-none",
         size === "lg"
-          ? "size-[92px] text-[46px]"
+          ? "size-23 text-[46px]"
           : size === "xs"
             ? "size-6 text-[13px]"
             : "size-8 text-[17px]",
@@ -42,15 +46,33 @@ export function Picker({
   dismissable,
   onClose,
   title,
+  owner,
+  startWith,
 }: {
   profiles: PublicProfile[];
   current: string | null;
   dismissable: boolean;
   onClose: () => void;
   title?: string;
+  /** Whose device this is: shown first, marked "This device". */
+  owner?: string;
+  /** Open straight at this person's PIN pad (their own device). */
+  startWith?: PublicProfile;
 }) {
   const refresh = useRefresh();
-  const [pinFor, setPinFor] = useState<PublicProfile | null>(null);
+  const [pinFor, setPinFor] = useState<PublicProfile | null>(startWith ?? null);
+  const sso = useQuery({
+    queryKey: ["sso"],
+    queryFn: () => api.get<SsoInfo>("/api/sso"),
+    staleTime: 5 * 60_000,
+  });
+  const ordered = owner
+    ? [...profiles].sort((a, b) => Number(b.id === owner) - Number(a.id === owner))
+    : profiles;
+  const signIn = () => {
+    const back = `${location.pathname}${location.search}`;
+    location.href = `/api/sso/start?returnTo=${encodeURIComponent(back)}`;
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +87,8 @@ export function Picker({
   }, [pinFor, dismissable, onClose]);
 
   const choose = async (p: PublicProfile | null) => {
+    // Someone else (or nobody) on this device's owner's device: don't open theirs by itself again.
+    if (owner && p?.id !== owner) local.set(NOT_OWNER, owner);
     if (p?.hasPin && p.id !== current) {
       setPinFor(p);
       return;
@@ -93,6 +117,7 @@ export function Picker({
         <PinPad
           profile={pinFor}
           onBack={() => setPinFor(null)}
+          submit={(pin) => api.post("/api/profile", { id: pinFor.id, pin })}
           onDone={async () => {
             await refresh();
             onClose();
@@ -104,14 +129,14 @@ export function Picker({
             {title ?? "Who's here?"}
           </h2>
           <div className="mb-8 flex flex-wrap justify-center gap-x-6 gap-y-5">
-            {profiles.map((p) => (
+            {ordered.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 disabled={busy}
                 onClick={() => choose(p)}
                 className={cx(
-                  "group relative flex w-[118px] flex-col items-center gap-2.5 rounded-3xl px-2 py-3 transition hover:-translate-y-1 hover:bg-surface",
+                  "group relative flex w-29.5 flex-col items-center gap-2.5 rounded-3xl px-2 py-3 transition hover:-translate-y-1 hover:bg-surface",
                   p.id === current && "bg-surface",
                 )}
               >
@@ -120,6 +145,9 @@ export function Picker({
                   {p.name}
                   {p.hasPin ? <Lock className="size-3.5 text-muted" aria-label="PIN" /> : null}
                 </span>
+                {p.id === owner ? (
+                  <span className="text-[11.5px] font-semibold text-accent">This device</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -129,8 +157,13 @@ export function Picker({
             </p>
           ) : null}
           <div className="flex flex-wrap justify-center gap-2">
+            {sso.data?.enabled ? (
+              <Button variant="primary" onClick={signIn}>
+                <KeyRound className="size-4" /> Sign in with {sso.data.label}
+              </Button>
+            ) : null}
             <Button onClick={() => choose(null)} busy={busy}>
-              Just visiting
+              Guest
             </Button>
             {dismissable ? (
               <Button variant="ghost" onClick={onClose}>
@@ -145,14 +178,21 @@ export function Picker({
   );
 }
 
-function PinPad({
+/** Four to eight digits for a profile; `submit` checks them (and throws to say why not). */
+export function PinPad({
   profile,
   onBack,
   onDone,
+  submit: check,
+  action = "Open",
+  hint = "Enter your PIN",
 }: {
-  profile: PublicProfile;
+  profile: Pick<PublicProfile, "name" | "avatar" | "color">;
   onBack: () => void;
   onDone: () => void;
+  submit: (pin: string) => Promise<unknown>;
+  action?: string;
+  hint?: string;
 }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -162,7 +202,7 @@ function PinPad({
     setBusy(true);
     setError(null);
     try {
-      await api.post("/api/profile", { id: profile.id, pin: value });
+      await check(value);
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -190,7 +230,7 @@ function PinPad({
     <div className="flex w-full max-w-xs flex-col items-center text-center">
       <Avatar p={profile} size="lg" />
       <h2 className="mt-3 text-2xl font-bold">{profile.name}</h2>
-      <p className="mt-1 text-sm text-muted">Enter your PIN</p>
+      <p className="mt-1 text-sm text-muted">{hint}</p>
       <div
         className="my-5 flex h-4 gap-3"
         aria-live="polite"
@@ -201,7 +241,7 @@ function PinPad({
           <span
             key={i}
             className={cx(
-              "size-3.5 rounded-full border-2 border-[var(--c-line-strong)]",
+              "size-3.5 rounded-full border-2 border-(--c-line-strong)",
               i < pin.length && "border-accent bg-accent",
             )}
           />
@@ -214,7 +254,7 @@ function PinPad({
             key={d}
             type="button"
             onClick={() => press(d)}
-            className="card size-[68px] text-2xl font-semibold hover:brightness-110"
+            className="card size-17 text-2xl font-semibold hover:brightness-110"
           >
             {d}
           </button>
@@ -223,14 +263,14 @@ function PinPad({
           type="button"
           onClick={() => setPin((p) => p.slice(0, -1))}
           aria-label="Delete"
-          className="grid size-[68px] place-items-center text-muted"
+          className="grid size-17 place-items-center text-muted"
         >
           <Delete className="size-6" />
         </button>
         <button
           type="button"
           onClick={() => press("0")}
-          className="card size-[68px] text-2xl font-semibold"
+          className="card size-17 text-2xl font-semibold"
         >
           0
         </button>
@@ -238,9 +278,9 @@ function PinPad({
           type="button"
           disabled={pin.length < 4 || busy}
           onClick={() => submit(pin)}
-          className="size-[68px] rounded-[var(--radius)] bg-accent text-sm font-bold text-white disabled:opacity-40"
+          className="size-17 rounded-(--radius) bg-accent text-sm font-bold text-white disabled:opacity-40"
         >
-          Open
+          {action}
         </button>
       </div>
       <Button variant="ghost" className="mt-5" onClick={onBack}>

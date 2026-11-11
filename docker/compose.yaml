@@ -1,18 +1,23 @@
-# Hearth in its own folder, built from source. See guides/install.md.
+# Hearth in its own folder. See guides/install.md.
 #
 #   mkdir -p hearth/data && cd hearth
-#   git clone https://github.com/mikedmor/hearth.git src
-#   cp src/docker/compose.yaml .
+#   curl -fsSLO https://raw.githubusercontent.com/mikedmor/hearth/main/docker/compose.yaml
 #   umask 077; printf "HEARTH_SECRET_KEY=%s\n" "$(openssl rand -base64 32)" > .env
-#   docker compose up -d --build
+#   docker compose up -d
 #
-# Only Hearth's container is built and started; nothing else on the machine is touched.
+# To update: docker compose pull && docker compose up -d
+# Only Hearth's container is started; nothing else on the machine is touched.
 services:
   hearth:
-    build:
-      context: ./src
-      dockerfile: Dockerfile
-    image: hearth:local
+    # `1` follows every 1.x release (updates never need you to change anything). Pin an exact
+    # version like 1.0.0 to update only when you choose.
+    image: ghcr.io/mikedmor/hearth:1
+    # Building from source instead: clone the repository into ./src, comment out `image:` above,
+    # and uncomment these. Then `docker compose up -d --build`.
+    # build:
+    #   context: ./src
+    #   dockerfile: Dockerfile
+    # image: hearth:local
     container_name: hearth
     restart: unless-stopped
     # Must own ./data on the host. Run `id` to see yours (Synology's first user is often 1026:100).

@@ -1,9 +1,11 @@
 /** The widget library (admin): every widget, where it's used, and making new ones. */
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { Audience, Widget, WidgetType } from "../../shared/config";
+import type { DevicesView } from "../../shared/devices";
+import { KEY as DEVICES_KEY, title as deviceTitle } from "../components/devices/parts";
 import {
   Button,
   ErrorNote,
@@ -13,6 +15,7 @@ import {
   Modal,
   Select,
   TextArea,
+  Toggle,
   useToast,
 } from "../components/ui";
 import { DEFAULT_TITLES } from "../components/widgets/WidgetCard";
@@ -24,7 +27,8 @@ const BUILTIN_HELP: Record<Exclude<WidgetType, "custom">, string> = {
   status: "How many services are up, from Hearth's own checks.",
   note: "A line for the family, like “Plex is down tonight”.",
   countdown: "Days to birthdays, holidays and trips.",
-  ai: "The AI computers: up, busy, what's loaded.",
+  ai: "The AI servers: up, busy, what's loaded.",
+  pinball: "A pinball table running VPin Studio: what's being played, high scores, players.",
   ask: "A box to ask the AI, which opens the chat.",
   clock: "The time here, and in other time zones.",
   agenda: "What's on today and this week, from each person's own calendar.",
@@ -94,7 +98,7 @@ export function WidgetsPage() {
               <div className="min-w-0 grow">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate font-bold">{w.title ?? DEFAULT_TITLES[w.type]}</h2>
-                  <span className="rounded-full bg-[var(--c-surface-2)] px-2 py-0.5 text-[11px] font-semibold text-muted">
+                  <span className="rounded-full bg-(--c-surface-2) px-2 py-0.5 text-[11px] font-semibold text-muted">
                     {w.type === "custom"
                       ? `${w.doc.sources.length} source${w.doc.sources.length === 1 ? "" : "s"}`
                       : "built in"}
@@ -131,7 +135,7 @@ export function WidgetsPage() {
         })}
       </ul>
       {editing ? (
-        <BuiltinEditor
+        <WidgetSettings
           widget={editing}
           onClose={() => setEditing(null)}
           taken={cfg.widgets.map((w) => w.id)}
@@ -170,7 +174,7 @@ function AddBuiltin({
       type === "note"
         ? { ...base, type, options: { text: "Hello from the admin!", tone: "info" } }
         : type === "countdown"
-          ? { ...base, type, options: { events: [], show: 3 } }
+          ? { ...base, type, options: { events: [], show: 3, calendar: true } }
           : ({ ...base, type } as Widget);
     try {
       await api.put(`/api/admin/widgets/${id}`, w);
@@ -203,7 +207,11 @@ function AddBuiltin({
   );
 }
 
-function BuiltinEditor({
+/**
+ * A widget's settings, like a section's: its name and who sees it, a built-in one's options, and
+ * for a custom one the way to its designer. Delete takes it off everyone's page.
+ */
+export function WidgetSettings({
   widget,
   onClose,
   taken,
@@ -214,6 +222,23 @@ function BuiltinEditor({
 }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const navigate = useNavigate();
+  const remove = async () => {
+    if (
+      !window.confirm(
+        `Delete “${widget.title ?? DEFAULT_TITLES[widget.type]}” for good? It comes off everyone's page.`,
+      )
+    )
+      return;
+    try {
+      await api.del(`/api/admin/widgets/${widget.id}`);
+      toast("Widget deleted");
+      await qc.invalidateQueries();
+      onClose();
+    } catch (e) {
+      setError(e);
+    }
+  };
   const [w, setW] = useState<Widget>(widget);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -236,10 +261,13 @@ function BuiltinEditor({
     <Modal
       open
       onClose={onClose}
-      title={`Edit ${widget.title ?? DEFAULT_TITLES[widget.type]}`}
+      title={`${widget.title ?? DEFAULT_TITLES[widget.type]}: settings`}
       wide
       footer={
         <>
+          <Button variant="ghost" className="mr-auto text-bad" onClick={() => void remove()}>
+            <Trash2 className="size-4" /> Delete
+          </Button>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
@@ -260,15 +288,27 @@ function BuiltinEditor({
               />
             )}
           </Field>
-          <Field label="Id" error={idTaken ? "Already taken." : undefined}>
-            {(id) => (
-              <Input
-                id={id}
-                value={w.id}
-                onChange={(e) => setW({ ...w, id: slugify(e.target.value) })}
-              />
-            )}
-          </Field>
+          {w.type === "custom" ? (
+            <Field label="Description" hint="Shown in the widget list.">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={w.description ?? ""}
+                  onChange={(e) => setW({ ...w, description: e.target.value || undefined })}
+                />
+              )}
+            </Field>
+          ) : (
+            <Field label="Id" error={idTaken ? "Already taken." : undefined}>
+              {(id) => (
+                <Input
+                  id={id}
+                  value={w.id}
+                  onChange={(e) => setW({ ...w, id: slugify(e.target.value) })}
+                />
+              )}
+            </Field>
+          )}
           <Field label="Who can see it">
             {(id) => (
               <Select
@@ -283,6 +323,32 @@ function BuiltinEditor({
             )}
           </Field>
         </div>
+        {w.type === "custom" ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line p-3">
+            <div className="grid">
+              <span className="font-semibold">What it shows</span>
+              <span className="text-[13px] text-muted">
+                {w.doc.sources.length} source{w.doc.sources.length === 1 ? "" : "s"},{" "}
+                {w.doc.blocks.length} block{w.doc.blocks.length === 1 ? "" : "s"}. Change them in
+                the designer.
+              </span>
+            </div>
+            <Button
+              onClick={() => {
+                onClose();
+                void navigate({ to: "/widgets/$id", params: { id: widget.id } });
+              }}
+            >
+              <Sparkles className="size-4" /> Open the designer
+            </Button>
+          </div>
+        ) : null}
+        {w.type === "pinball" ? (
+          <PinballTable
+            value={w.options.device}
+            onChange={(device) => setW({ ...w, options: { ...w.options, device } })}
+          />
+        ) : null}
         {w.type === "note" ? (
           <>
             <Field label="Note">
@@ -314,6 +380,12 @@ function BuiltinEditor({
         ) : null}
         {w.type === "countdown" ? (
           <div className="grid gap-2">
+            <Toggle
+              label="Also what's next on each person's calendar"
+              hint="Everyone sees their own calendar's next events among these."
+              checked={w.options.calendar}
+              onChange={(calendar) => setW({ ...w, options: { ...w.options, calendar } })}
+            />
             <p className="text-[13px] font-semibold">Events</p>
             {w.options.events.map((e, i) => (
               <div
@@ -420,5 +492,41 @@ function BuiltinEditor({
         <ErrorNote error={error} />
       </div>
     </Modal>
+  );
+}
+
+/** Which pinball table the widget shows: the devices where VPin Studio was found. */
+function PinballTable({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (device: string | undefined) => void;
+}) {
+  const q = useQuery({
+    queryKey: DEVICES_KEY,
+    queryFn: () => api.get<DevicesView>("/api/admin/devices"),
+  });
+  const tables = (q.data?.devices ?? []).filter((d) => d.vpin && d.device);
+  return (
+    <Field
+      label="Table"
+      hint={
+        tables.length
+          ? "A device running VPin Studio."
+          : "None found yet. On the Devices page, open the table and Look for services."
+      }
+    >
+      {(id) => (
+        <Select id={id} value={value ?? ""} onChange={(e) => onChange(e.target.value || undefined)}>
+          <option value="">The first one found</option>
+          {tables.map((d) => (
+            <option key={d.key} value={d.device?.id}>
+              {deviceTitle(d)}
+            </option>
+          ))}
+        </Select>
+      )}
+    </Field>
   );
 }

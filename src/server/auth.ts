@@ -32,6 +32,8 @@ interface AuthFile {
   v: 1;
   admin?: string;
   pins: Record<string, string>;
+  /** Single sign-on accounts linked to profiles: the provider's "sub" → who, and what to call it. */
+  links?: Record<string, { profile: string; label?: string }>;
 }
 
 export async function hashSecret(secret: string): Promise<string> {
@@ -186,6 +188,22 @@ export class AuthStore {
     });
   }
 
+  /**
+   * Check a profile's PIN without opening it (a grown-up unlocking a child's device). A profile
+   * without a PIN can't vouch for anything: anyone could pick its face.
+   */
+  async checkPin(profile: string, pin: string): Promise<void> {
+    const stored = this.file.pins[profile];
+    if (!stored) throw new AuthError("That person needs a PIN first (Settings → People).", 403);
+    const key = `pin:${profile}`;
+    this.guard(key);
+    if (!(await verifySecret(pin, stored))) {
+      this.failed(key);
+      throw new AuthError("That PIN isn't right.");
+    }
+    this.tries.delete(key);
+  }
+
   /** The profile a cookie opens, if it's still valid for that profile's current PIN. */
   profileOf(cookie: string | undefined): string | null {
     const p = this.verify(cookie);
@@ -203,10 +221,68 @@ export class AuthStore {
   }
 
   async forgetProfile(profile: string): Promise<void> {
-    if (this.file.pins[profile]) {
+    const links = Object.entries(this.file.links ?? {}).filter(([, l]) => l.profile === profile);
+    if (this.file.pins[profile] || links.length) {
       delete this.file.pins[profile];
+      for (const [sub] of links) delete this.file.links?.[sub];
       await this.save();
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Single sign-on: someone the home's identity provider has already proven
+
+  /** Open a profile for someone the identity provider signed in (no PIN: they used a passkey). */
+  profileCookieFor(profile: string): string {
+    return this.sign({
+      k: "p",
+      id: profile,
+      s: stamp(this.file.pins[profile]),
+      exp: this.now() + PROFILE_DAYS * 86_400_000,
+    });
+  }
+
+  /** The admin's session, for someone in the identity provider's admin group. */
+  adminCookieFor(): string {
+    if (!this.file.admin) throw new AuthError("Set the admin password first.", 403);
+    return this.adminCookie();
+  }
+
+  /** Who an identity provider account opens, if it's linked. */
+  linkedProfile(sub: string): string | undefined {
+    return this.file.links?.[sub]?.profile;
+  }
+
+  /** Each profile's linked account, for the admin. */
+  links(): { profile: string; sub: string; label?: string }[] {
+    return Object.entries(this.file.links ?? {}).map(([sub, l]) => ({ sub, ...l }));
+  }
+
+  /** Tie an account to a profile (one account per profile; linking again replaces it). */
+  async link(sub: string, profile: string, label?: string): Promise<void> {
+    const links = { ...(this.file.links ?? {}) };
+    for (const [s, l] of Object.entries(links)) if (l.profile === profile) delete links[s];
+    links[sub] = { profile, label };
+    this.file.links = links;
+    await this.save();
+  }
+
+  async unlink(profile: string): Promise<void> {
+    const links = { ...(this.file.links ?? {}) };
+    for (const [s, l] of Object.entries(links)) if (l.profile === profile) delete links[s];
+    this.file.links = links;
+    await this.save();
+  }
+
+  /** A profile was renamed: its link follows. */
+  async renameLinks(from: string, to: string): Promise<void> {
+    let changed = false;
+    for (const l of Object.values(this.file.links ?? {}))
+      if (l.profile === from) {
+        l.profile = to;
+        changed = true;
+      }
+    if (changed) await this.save();
   }
 
   // -------------------------------------------------------------------------

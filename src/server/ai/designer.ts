@@ -33,6 +33,8 @@ export interface DesignDeps {
   homeName?: string;
   /** The home's services (the tiles), so the model knows real addresses instead of guessing. */
   services?: { name: string; url: string; checkUrl?: string }[];
+  /** Systems connected in Settings, for connection sources (no sign-ins here). */
+  connections?: GuideConnection[];
   fetch?: typeof fetch;
   /** Each step, for the server's log. */
   log?: (msg: string) => void;
@@ -41,7 +43,17 @@ export interface DesignDeps {
 }
 
 /** Instructions for any assistant: the built-in designer, or one the person pastes this into. */
-export function widgetGuide(opts: { secrets: string[]; allowInternet: boolean }): string {
+export interface GuideConnection {
+  to: string;
+  name: string;
+  paths: { get: string; label: string }[];
+}
+
+export function widgetGuide(opts: {
+  secrets: string[];
+  allowInternet: boolean;
+  connections?: GuideConnection[];
+}): string {
   const blocks = Object.entries(BLOCK_HELP)
     .map(([k, v]) => `- ${k}: ${v}`)
     .join("\n");
@@ -54,7 +66,16 @@ export function widgetGuide(opts: { secrets: string[]; allowInternet: boolean })
 SOURCES (at most ${MAX_SOURCES}), where data comes from. Each has an id (lowercase, like "nas"):
 - {"id","kind":"http","url","method":"GET"|"POST","headers":{},"body","every": seconds (min 5),"path": "data.items" (optional part of the answer),"track": formula giving a number to keep a history of,"keep": how many}
 - {"id","kind":"websocket","url":"ws://…","send": first message to send,"mode":"replace"|"merge","path","track","keep"}
-- {"id","kind":"hearth","what":"status"|"ai"|"time"}: Hearth's own data. status = {tiles:[{id,name,state,ms}],up,down,total}; ai = {servers:[{id,name,state,models,loaded}]}; time = {now,hour,minute,weekday,date}.
+- {"id","kind":"hearth","what":…}: Hearth's own data, no address needed:
+  status = {tiles:[{id,name,state,ms}],up,down,total}
+  devices = {devices:[{name,type,online,people,shared,ip,lastSeen,services:[{name,state,ms}],down}],people:[{name,home,devices,online}],total,online,offline,servicesDown}
+  network = {connected,router,nodes:[{name,model,clients,online,links:[{name,ip,band,online}]}],clients:[{name,ip,band,online,node}],total,online}
+  machines = {machines:[{name,server,online,available,busy,jobs,served,avgMs,models,loaded,hardware}],total,online,busy}
+  ai = {servers:[{id,name,state,models,loaded}]}
+  pinball = {name,on,playing:{name,since},last,tables,scores:[{initials,score,table,label,at}],players:[{name,rank,points,first}]}
+  smarthome = {things:[{name,hub,online,points:[{label,kind,state,on}],readings:{label:state}}],total}
+  host = {hostname,cpus,load1,load5,memTotal,memUsed,uptime,diskTotal,diskUsed}; time = {now,hour,minute,weekday,date}
+- {"id","kind":"connection","to","get":"/api/path","every","path","track","keep"}: a system the home already connected in Hearth's settings, read with the sign-in Hearth keeps (never write keys for these). GET only.${opts.connections?.length ? `\n  Connected now: ${opts.connections.map((c) => `to "${c.to}" (${c.name}; try ${c.paths.map((p) => p.get).join(", ")})`).join("; ")}.` : "\n  None are connected yet."}
 ${opts.allowInternet ? "Sources may use the internet." : "Sources must be on the home network (.home, .local, private IPs); the internet is turned off."}
 Secrets (API keys) are never written into the widget. Use {{secret:name}} in a url, header, body or send. Secrets that exist: ${opts.secrets.length ? opts.secrets.join(", ") : "none yet (ask the person to add one in Settings → Secrets)"}.
 
@@ -87,7 +108,7 @@ function servicesList(deps: DesignDeps): string {
 function systemPrompt(deps: DesignDeps): string {
   return `You design widgets for Hearth, the start page of a home network${deps.homeName ? ` (${deps.homeName})` : ""}.
 
-${widgetGuide({ secrets: deps.secrets.names(), allowInternet: deps.allowInternet })}
+${widgetGuide({ secrets: deps.secrets.names(), allowInternet: deps.allowInternet, connections: deps.connections })}
 
 FIRST: Hearth already checks every service in the list below, all the time. If the person wants to
 know whether services, apps or containers are up or running, use a {"kind":"hearth","what":"status"}
@@ -106,6 +127,8 @@ don't try others at random: say what failed and ask.
 
 HOW TO ANSWER: always reply with exactly one JSON object and nothing else.
 - To look at an API before designing: {"say": "what you're checking", "fetch": [{"url": "...", "kind": "http"|"websocket", "headers": {}, "send": "..."}]} (at most 3). You'll get back what each returned. Always look before binding to fields you haven't seen.
+- To look at Hearth's own data or a connected system the same way: {"say": "…", "fetch": [{"source": {"kind": "hearth", "what": "devices"}}, {"source": {"kind": "connection", "to": "adguard", "get": "/control/stats"}}]}.
+Prefer Hearth's own data and connected systems to typing addresses: they need no keys and are already known to work.
 - To propose the widget: {"say": "a short note on what it shows", "doc": { the full widget document }}. Hearth checks it and runs it; if something's wrong you'll be told, so fix it and send the whole document again.
 - To ask the person something (an address, which values matter): {"say": "your question"}.
 Keep "say" short and friendly. Prefer few, well-chosen blocks that read well on a phone.`;
@@ -118,6 +141,8 @@ interface Turn {
     kind?: "http" | "websocket";
     headers?: Record<string, string>;
     send?: string;
+    /** Hearth's own data or a connected system, instead of an address. */
+    source?: { kind?: string; [k: string]: unknown };
   }[];
   doc?: unknown;
 }
@@ -215,6 +240,12 @@ export async function design(
       const results: string[] = [];
       let refused = 0;
       for (const f of turn.fetch.slice(0, 3)) {
+        if (f?.source && typeof f.source === "object") {
+          const r = await lookSource(deps, f.source);
+          emit({ type: "fetched", url: r.label, ok: r.ok, note: r.note });
+          results.push(`${r.label}\n${r.ok ? "returned" : "failed"}: ${r.text}`);
+          continue;
+        }
         if (typeof f?.url !== "string") continue;
         if (!mayLook(f.url)) {
           refused++;
@@ -303,6 +334,32 @@ export async function design(
     text: "I couldn't get it right in a few tries. Tell me more about the data, or adjust the draft by hand.",
   });
   emit({ type: "done" });
+}
+
+/** Hearth's own data, or a connected system's API (signed in by Hearth), as the model sees it. */
+async function lookSource(
+  deps: DesignDeps,
+  src: { kind?: string; [k: string]: unknown },
+): Promise<{ ok: boolean; text: string; note: string; label: string }> {
+  const label =
+    src.kind === "connection"
+      ? `connection ${String(src.to)} ${String(src.get ?? "")}`
+      : `hearth ${String(src.what)}`;
+  if (src.kind !== "hearth" && src.kind !== "connection")
+    return { ok: false, label, text: "only hearth and connection sources", note: "Not a source." };
+  const r = await deps.hub.preview({
+    v: 1,
+    sources: [{ ...src, id: "probe" }],
+    blocks: [{ id: "x", kind: "divider" }],
+  });
+  if (r.issues.length) {
+    const text = r.issues.map((i) => `${i.path}: ${i.message}`).join("; ");
+    return { ok: false, label, text, note: text };
+  }
+  const s = r.samples.probe;
+  if (!s?.ok)
+    return { ok: false, label, text: s?.error ?? "no data", note: s?.error ?? "No data." };
+  return { ok: true, label, text: clip(JSON.stringify(s.sample)), note: "Read it." };
 }
 
 async function look(

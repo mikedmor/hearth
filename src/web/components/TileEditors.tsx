@@ -6,12 +6,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Lock, User, Users } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { LinkSuggestion } from "../../shared/access";
 import type { Access, HomeView, PublicProfile } from "../../shared/api";
 import type { Audience, Tile } from "../../shared/config";
 import { api } from "../lib/api";
 import { cx, slugify } from "../lib/format";
 import { IconPicker } from "./IconPicker";
 import { Avatar } from "./Picker";
+import { SvgIcon } from "./Tile";
 import { Button, ErrorNote, Field, Input, Modal, Select, Spinner, Toggle, useToast } from "./ui";
 
 export type EditTarget =
@@ -264,11 +266,14 @@ export function LinkForm({
   group,
   ctx,
   onClose,
+  from,
 }: {
   id: string | null;
   group?: string;
   ctx: EditContext;
   onClose: () => void;
+  /** A new link to a suggested service, filled in. */
+  from?: LinkSuggestion;
 }) {
   const existing = useQuery({
     queryKey: ["tile", id],
@@ -286,7 +291,11 @@ export function LinkForm({
   }
   const start = (): Tile => {
     const sections = ctx.sections.filter((s) => s.canAdd);
-    const chosen = sections.find((s) => s.id === group) ?? sections[0];
+    // A service on the network is the house's: for the admin, it starts in a house section.
+    const chosen =
+      sections.find((s) => s.id === group) ??
+      (from && ctx.admin ? sections.find((s) => s.access.kind !== "mine") : undefined) ??
+      sections[0];
     // A link starts as the section's: your own in your own section, the house's otherwise (admin).
     const own = !ctx.admin || chosen?.access.kind === "mine";
     return {
@@ -299,6 +308,16 @@ export function LinkForm({
       check: true,
       keywords: [],
       newTab: false,
+      ...(from
+        ? {
+            name: from.name,
+            url: from.url,
+            icon: from.icon,
+            color: from.color,
+            app: from.app,
+            description: from.description,
+          }
+        : {}),
     };
   };
   return (
@@ -340,6 +359,25 @@ function LinkFormBody({
     }, 700);
     return () => clearTimeout(timer);
   }, [t.url, ctx.admin]);
+
+  // Services the home has that no link leads to yet (the admin's, for a new link).
+  const suggestions = useQuery({
+    queryKey: ["link-suggestions"],
+    queryFn: () => api.get<{ suggestions: LinkSuggestion[] }>("/api/admin/link-suggestions"),
+    enabled: ctx.admin && isNew,
+    staleTime: 30_000,
+  });
+  const suggest = (s: LinkSuggestion) => {
+    setT({
+      ...t,
+      name: s.name,
+      url: s.url,
+      icon: s.icon,
+      color: s.color ?? t.color,
+      app: s.app,
+      description: t.description ?? s.description,
+    });
+  };
 
   const applyApp = (app: NonNullable<Recognised["app"]>) =>
     setT({
@@ -437,6 +475,31 @@ function LinkFormBody({
         </>
       }
     >
+      {isNew && suggestions.data?.suggestions.length ? (
+        <div className="mb-4 grid gap-1.5">
+          <p className="text-[12.5px] font-semibold text-muted">
+            Services on your network with no link yet
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.data.suggestions.map((s) => (
+              <button
+                key={s.url}
+                type="button"
+                onClick={() => suggest(s)}
+                title={s.url}
+                className={cx(
+                  "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] font-semibold hover:border-accent",
+                  t.url === s.url ? "border-accent bg-accent/10" : "border-line",
+                )}
+              >
+                {s.svg ? <SvgIcon svg={s.svg} className="size-4" /> : null}
+                {s.name}
+                <span className="font-normal text-muted">{hostOf(s.url)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {seen?.app ? (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-[13.5px]">
           <span className="grow">
@@ -730,3 +793,11 @@ export function SectionForm({
     </Modal>
   );
 }
+
+const hostOf = (u: string) => {
+  try {
+    return new URL(u).host;
+  } catch {
+    return u;
+  }
+};

@@ -10,6 +10,7 @@
  * Colours are tones the theme fills in, so a widget can't clash with the page.
  */
 import { z } from "zod";
+import { CARD_COLORS, CARD_MARKS, type ChartOptions, type QueryResult } from "./cardkit/result";
 import { checkTemplate, FUNCTIONS, parse } from "./expr";
 
 export const MAX_SOURCES = 8;
@@ -35,6 +36,11 @@ export const HttpSource = z.object({
   method: z.enum(["GET", "POST"]).default("GET"),
   headers: z.record(z.string().max(100), withSecrets).default({}),
   body: withSecrets.optional(),
+  /**
+   * HTTP Digest sign-in (PrusaLink, some cameras): "user:password", usually from a secret. Hearth
+   * answers the device's challenge itself.
+   */
+  digest: withSecrets.optional(),
   /** Seconds between fetches. */
   every: z.number().int().min(5).max(86_400).default(60),
   /** Read only this part of the answer, like `data.items`. */
@@ -60,17 +66,55 @@ export const WebSocketSource = z.object({
   keep: z.number().int().min(2).max(500).default(60),
 });
 
+export const HEARTH_WHATS = [
+  "status",
+  "ai",
+  "time",
+  "host",
+  "devices",
+  "network",
+  "machines",
+  "pinball",
+  "smarthome",
+] as const;
+export type HearthWhat = (typeof HEARTH_WHATS)[number];
+
 export const HearthSource = z.object({
   id,
   kind: z.literal("hearth"),
-  /** status: every tile's up/down; ai: the AI servers; time: the clock. */
-  what: z.enum(["status", "ai", "time", "host"]),
+  /**
+   * status: every tile's up/down; ai: the AI servers; time: the clock; host: Hearth's machine;
+   * devices: the saved devices; network: the router's map; machines: the AI servers' computers;
+   * pinball: the table; smarthome: the hubs' readings.
+   */
+  what: z.enum(HEARTH_WHATS),
+});
+
+/**
+ * A system already connected in Settings (AdGuard Home, Home Assistant, openHAB, an AI server),
+ * read with the sign-in Hearth keeps for it. GET only.
+ */
+export const ConnectionSource = z.object({
+  id,
+  kind: z.literal("connection"),
+  /** "adguard", "homeassistant", "openhab", "ai:<server id>". */
+  to: z.string().regex(/^[a-z][a-z0-9:_-]{0,60}$/, "a connection, like adguard"),
+  /** The API path on it: "/control/stats". */
+  get: z
+    .string()
+    .regex(/^\/\S*$/, "a path starting with /")
+    .max(500),
+  every: z.number().int().min(5).max(86_400).default(60),
+  path: z.string().max(200).optional(),
+  track: formula.optional(),
+  keep: z.number().int().min(2).max(500).default(60),
 });
 
 export const SourceSchema = z.discriminatedUnion("kind", [
   HttpSource,
   WebSocketSource,
   HearthSource,
+  ConnectionSource,
 ]);
 export type Source = z.infer<typeof SourceSchema>;
 
@@ -85,7 +129,73 @@ const blockBase = {
   tone: z.string().max(400).optional(),
 };
 
+/** One line of numbers on a chart: a formula over `$item`, with how it's drawn and read. */
+const ChartSeries = z.object({
+  label: z.string().max(40),
+  value: formula,
+  color: z.enum(CARD_COLORS).optional(),
+  mark: z.enum(CARD_MARKS).optional(),
+  /** How its numbers read: money, a percent (a fraction), or a plain number (the default). */
+  format: z.enum(["number", "money", "percent"]).optional(),
+});
+
+/**
+ * Charts from Muny's card kit: each item of a list is a row; `x` names it (a date or a name),
+ * and each series is a number from it. Worked out into columns and rows on the server.
+ */
+const chartBase = {
+  ...blockBase,
+  items: formula,
+  /** What each item is called, a formula over `$item`: a date (YYYY-MM-DD), a month, or a name. */
+  x: formula,
+  /** What the x values are, for the legend and table ("Day", "Disk"). */
+  xLabel: z.string().max(40).optional(),
+  series: z.array(ChartSeries).min(1).max(8),
+  limit: z.number().int().min(1).max(400).default(60),
+  height: z.number().int().min(80).max(480).optional(),
+  legend: z.boolean().optional(),
+};
+
+export const CHART_KINDS = [
+  "columns",
+  "area",
+  "pie",
+  "treemap",
+  "heatmap",
+  "scatter",
+  "waterfall",
+  "calendar",
+] as const;
+
 export const BlockSchema = z.discriminatedUnion("kind", [
+  z.object({ ...chartBase, kind: z.literal("columns"), stacked: z.boolean().default(false) }),
+  z.object({ ...chartBase, kind: z.literal("area"), stacked: z.boolean().default(false) }),
+  z.object({
+    ...chartBase,
+    kind: z.literal("pie"),
+    /** A ring (the default), or a full pie. */
+    donut: z.boolean().default(true),
+    /** What the middle of the ring says (a template); the total when left out. */
+    center: template.optional(),
+  }),
+  z.object({ ...chartBase, kind: z.literal("treemap") }),
+  z.object({
+    ...chartBase,
+    kind: z.literal("heatmap"),
+    /** The second axis, a formula over `$item` (the weekday, the hour). */
+    y: formula,
+    yLabel: z.string().max(40).optional(),
+  }),
+  /** Each item is a dot: the first series is across, the second up; `x` names the dot. */
+  z.object({ ...chartBase, kind: z.literal("scatter") }),
+  z.object({ ...chartBase, kind: z.literal("waterfall") }),
+  z.object({
+    ...chartBase,
+    kind: z.literal("calendar"),
+    series: z.array(ChartSeries).max(1).default([]),
+    /** What each day's entry says, a formula over `$item` (an event's name). */
+    name: formula.optional(),
+  }),
   z.object({ ...blockBase, kind: z.literal("heading"), text: template }),
   z.object({
     ...blockBase,
@@ -244,7 +354,7 @@ const FORMULA_KEYS = [
   "itemState",
   "display",
 ];
-const TEMPLATE_KEYS = ["text", "label", "sub", "detail", "src"];
+const TEMPLATE_KEYS = ["text", "label", "sub", "detail", "src", "center"];
 
 export interface DocIssue {
   path: string;
@@ -315,6 +425,11 @@ export function checkDoc(input: unknown): { doc: WidgetDoc | null; issues: DocIs
         tryFormula(`blocks.${i}.columns.${j}.value`, c.value);
     if (b.kind === "pairs")
       for (const [j, p] of b.items.entries()) tryTemplate(`blocks.${i}.items.${j}.value`, p.value);
+    // Charts: where each row's name comes from, and each series' numbers.
+    if ("series" in b && Array.isArray(b.series)) {
+      for (const k of ["x", "y", "name"]) tryFormula(`blocks.${i}.${k}`, rec[k]);
+      for (const [j, s] of b.series.entries()) tryFormula(`blocks.${i}.series.${j}.value`, s.value);
+    }
   });
   return { doc: issues.length ? null : doc, issues };
 }
@@ -380,6 +495,11 @@ export type ResolvedBlock = {
       height: number;
     }
   | { kind: "divider" }
+  | {
+      kind: (typeof CHART_KINDS)[number];
+      query: QueryResult;
+      options: ChartOptions;
+    }
 );
 
 export interface WidgetFrame {
@@ -410,6 +530,17 @@ export const BLOCK_HELP: Record<BlockKind, string> = {
   image:
     "A picture from the home network (a camera snapshot): src (template), every (seconds), fit, height.",
   divider: "A line between sections.",
+  columns:
+    'Columns over time or by name: items (a list), x (formula over $item: a date "YYYY-MM-DD", a month or a name), xLabel, series [{label, value (formula over $item), color ("series1".."series8", "positive", "negative"), mark ("column", "line", "dashed", "area"), format ("number", "money", "percent")}], stacked, height, limit.',
+  area: "Filled lines, like columns: items, x, series, stacked, height.",
+  pie: "A ring of shares: items, x (each slice's name), one series (the size), donut (false for a full pie), center (template).",
+  treemap: "Boxes sized by value: items, x (each box's name), one series.",
+  heatmap: "A grid shaded by value: items, x (across), y (down, formula over $item), one series.",
+  scatter: "Dots: items, x (each dot's name), two series (across, then up).",
+  waterfall:
+    "How a total builds up step by step: items, x (each step), one series (positive or negative).",
+  calendar:
+    "A month calendar: items, x (each entry's date, YYYY-MM-DD), name (what it says), and optionally one series (an amount).",
 };
 
 export function functionHelp(): string {

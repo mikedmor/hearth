@@ -11,10 +11,22 @@
 import { createHash } from "node:crypto";
 import { statfsSync } from "node:fs";
 import { cpus, freemem, hostname, loadavg, uptime as osUptime, totalmem } from "node:os";
-import type { PreviewResult, StatusMap, WidgetUpdate } from "../../shared/api";
+import type {
+  AiMachine,
+  PinballWidgetData,
+  PreviewResult,
+  StatusMap,
+  WidgetUpdate,
+} from "../../shared/api";
 import { canSee, type HearthConfig, isChecked, type Role, type Widget } from "../../shared/config";
 import { run, toNumber } from "../../shared/expr";
-import { checkDoc, type Source, type WidgetDoc, type WidgetFrame } from "../../shared/widget-doc";
+import {
+  checkDoc,
+  type HearthWhat,
+  type Source,
+  type WidgetDoc,
+  type WidgetFrame,
+} from "../../shared/widget-doc";
 import { resolveDoc } from "../../shared/widget-eval";
 import type { AiMonitor } from "../ai/monitor";
 import {
@@ -28,11 +40,24 @@ import {
 } from "../net";
 import type { SecretStore } from "../secrets";
 import { visibleTiles } from "../view";
+import { readConnection, type SignIn } from "./connections";
+import { digestAuthorization, parseChallenge } from "./digest";
 
 export interface HubDeps {
   config: () => HearthConfig;
   status: () => StatusMap;
   ai: AiMonitor;
+  /** The pinball widget's data (the device monitor). */
+  pinball?: (device?: string) => PinballWidgetData;
+  /** The AI servers' computers (the device monitor asks the servers that list them). */
+  machines?: () => { server: string; list: AiMachine[] }[];
+  /** The device monitor's data for Hearth sources: devices, network, smarthome. */
+  hearth?: (what: HearthWhat) => unknown;
+  /**
+   * A system connected in Settings, with its sign-in, for connection sources (the headers stay on
+   * the server).
+   */
+  connection?: (to: string) => ({ base: string } & SignIn) | null;
   secrets: SecretStore;
   now?: () => number;
   fetch?: typeof fetch;
@@ -120,6 +145,7 @@ export class CustomRunner {
     await Promise.all(
       this.doc.sources.map(async (s) => {
         if (s.kind === "http") await this.fetchHttp(s);
+        else if (s.kind === "connection") await this.fetchConnection(s);
         else if (s.kind === "hearth") this.set(s, hearthData(s.what, this.deps), true);
         else await this.firstMessage(s, waitForSockets);
       }),
@@ -151,10 +177,11 @@ export class CustomRunner {
       }
       return;
     }
-    if (s.kind === "http") {
+    if (s.kind === "http" || s.kind === "connection") {
       const loop = async () => {
         if (this.stopped) return;
-        await this.fetchHttp(s);
+        if (s.kind === "http") await this.fetchHttp(s);
+        else await this.fetchConnection(s);
         if (!this.stopped) this.timers.push(setTimeout(loop, s.every * 1000));
       };
       void loop();
@@ -205,17 +232,65 @@ export class CustomRunner {
       const url = fill(s.url);
       const headers = Object.fromEntries(Object.entries(s.headers).map(([k, v]) => [k, fill(v)]));
       const body = s.body ? fill(s.body) : undefined;
+      const digest = s.digest ? fill(s.digest) : undefined;
       if (missing.length)
         throw new NetError(
           `No secret called ${missing.join(", ")} (add it in Settings → Secrets).`,
         );
-      const res = await guardedFetch(url, {
+      let res = await guardedFetch(url, {
         method: s.method,
         headers,
         body,
         policy: this.policy(),
         fetch: this.deps.fetch,
       });
+      // Digest sign-in: answer the device's challenge and ask again.
+      const challenge =
+        digest && res.status === 401
+          ? parseChallenge(res.headers.get("www-authenticate") ?? "")
+          : null;
+      if (digest && challenge) {
+        const at = digest.indexOf(":");
+        const u = new URL(url);
+        res = await guardedFetch(url, {
+          method: s.method,
+          headers: {
+            ...headers,
+            Authorization: digestAuthorization(
+              challenge,
+              s.method,
+              `${u.pathname}${u.search}`,
+              digest.slice(0, at),
+              digest.slice(at + 1),
+            ),
+          },
+          body,
+          policy: this.policy(),
+          fetch: this.deps.fetch,
+        });
+      }
+      if (res.status === 401 && digest)
+        throw new NetError("It refused the user name and password.");
+      if (res.status >= 400) throw new NetError(`It answered ${res.status}.`);
+      this.set(s, pick(parseBody(res), s.path), true);
+    } catch (e) {
+      this.set(s, undefined, false, this.deps.secrets.redact((e as Error).message));
+    }
+  }
+
+  /** A connected system's API, with the sign-in Hearth keeps for it. Read only. */
+  private async fetchConnection(s: Extract<Source, { kind: "connection" }>) {
+    try {
+      const conn = this.deps.connection?.(s.to);
+      if (!conn)
+        throw new NetError(
+          `Nothing called "${s.to}" is connected (Settings, or the Devices page).`,
+        );
+      const res = await readConnection(conn, s.get, this.deps.fetch);
+      if (res.status === 401 || res.status === 403)
+        throw new NetError(
+          "It refused Hearth's sign-in. Check its access on the Devices page (or in Setup).",
+        );
       if (res.status >= 400) throw new NetError(`It answered ${res.status}.`);
       this.set(s, pick(parseBody(res), s.path), true);
     } catch (e) {
@@ -387,8 +462,22 @@ const safeHost = (u: string) => {
   }
 };
 
-function hearthData(what: "status" | "ai" | "time" | "host", deps: HubDeps): unknown {
+function hearthData(what: HearthWhat, deps: HubDeps): unknown {
   if (what === "host") return hostData(deps);
+  if (what === "pinball") return deps.pinball?.() ?? { missing: true };
+  if (what === "machines") {
+    const all = deps.machines?.() ?? [];
+    const list = all.flatMap((g) => g.list.map((m) => ({ ...m, server: g.server })));
+    return {
+      servers: all.map((g) => ({ server: g.server, machines: g.list })),
+      machines: list,
+      total: list.length,
+      online: list.filter((m) => m.online).length,
+      busy: list.filter((m) => m.busy).length,
+    };
+  }
+  if (what === "devices" || what === "network" || what === "smarthome")
+    return deps.hearth?.(what) ?? null;
   if (what === "time") {
     const d = new Date((deps.now ?? Date.now)());
     return {
@@ -534,10 +623,24 @@ export class WidgetHub {
               new Date((this.deps.now ?? Date.now)()),
               w.options.show,
             ),
+            show: w.options.show,
+            calendar: w.options.calendar,
           },
         };
       case "ai":
         return { id: w.id, type: "ai", data: aiData(this.deps) };
+      case "pinball":
+        return {
+          id: w.id,
+          type: "pinball",
+          data: this.deps.pinball?.(w.options.device) ?? {
+            missing: true,
+            on: false,
+            recent: [],
+            scores: [],
+            players: [],
+          },
+        };
       case "ask":
         return { id: w.id, type: "ask", data: {} };
       case "agenda":
@@ -571,7 +674,12 @@ export class WidgetHub {
     for (const { runner } of this.runners.values()) runner.hearthChanged();
   }
 
-  private refreshBuiltins(type: "status" | "ai") {
+  /** A pinball table's state changed. */
+  pinballChanged(): void {
+    this.refreshBuiltins("pinball");
+  }
+
+  private refreshBuiltins(type: "status" | "ai" | "pinball") {
     for (const [id, set] of this.subs) {
       const w = this.widget(id);
       if (!w || w.type !== type) continue;
@@ -639,6 +747,7 @@ export class WidgetHub {
       maxBytes: 8 * 1024 * 1024,
       timeoutMs: 10_000,
       fetch: this.deps.fetch,
+      firstFrame: true,
     });
     if (res.status >= 400 || !/^image\/(png|jpe?g|gif|webp|avif|bmp)/.test(res.contentType))
       return null;
@@ -661,6 +770,7 @@ function statusData(deps: HubDeps, role: Role | null) {
 }
 
 function aiData(deps: HubDeps) {
+  const machines = deps.machines?.() ?? [];
   return {
     servers: deps.ai.list().map((s) => ({
       id: s.id,
@@ -669,6 +779,23 @@ function aiData(deps: HubDeps) {
       models: s.models.length,
       loaded: s.loaded.map((m) => m.name),
       ms: s.ms,
+      machines: machines
+        .find((m) => m.server === s.name)
+        ?.list.map((m) => ({
+          name: m.name,
+          online: m.online,
+          busy: m.busy,
+          available: m.available,
+          reason: m.reason,
+          loaded: m.loaded,
+          jobs: m.jobs,
+          served: m.served,
+          avgMs: m.avgMs,
+          os: m.os,
+          gpu: m.hardware?.gpus.map((g) => g.name).join(" + ") || undefined,
+          vramMib: m.hardware?.gpus.reduce((n, g) => n + g.vramMib, 0) || undefined,
+          memoryMib: m.hardware?.memoryMib,
+        })),
     })),
   };
 }

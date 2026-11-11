@@ -254,7 +254,7 @@ export function FindServices({ onClose }: { onClose: () => void }) {
                         return n;
                       })
                     }
-                    className="size-4 flex-none accent-[var(--c-accent)]"
+                    className="size-4 flex-none accent-accent"
                   />
                   <span className="flex-none scale-75">
                     <TileIcon

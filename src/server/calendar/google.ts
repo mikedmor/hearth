@@ -10,6 +10,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Repeat } from "../../shared/calendar";
 import { guardedFetch, type NetPolicy } from "../net";
+import { utcRule } from "./ics";
 
 export const GOOGLE_REDIRECT = "http://127.0.0.1:53682/";
 const AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -361,6 +362,50 @@ export class GoogleAccount {
       `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
       googleBody(input, series),
     );
+  }
+
+  /**
+   * Bring in an event from a calendar file, known by the file's own id (iCalUID): importing the
+   * same one again updates it instead of adding a second copy.
+   */
+  async importEvent(
+    calendarId: string,
+    e: {
+      uid: string;
+      title: string;
+      start: string;
+      end: string;
+      allDay: boolean;
+      timeZone?: string;
+      location?: string;
+      notes?: string;
+      repeat?: Repeat;
+      rrule?: string;
+      except: string[];
+    },
+  ): Promise<void> {
+    const when = (w: string): GoogleTime =>
+      e.allDay
+        ? { date: w.slice(0, 10) }
+        : { dateTime: new Date(w).toISOString(), timeZone: e.timeZone ?? "UTC" };
+    const recurrence: string[] = [];
+    if (e.rrule) recurrence.push(`RRULE:${utcRule(e.rrule, e.timeZone).toString()}`);
+    else if (e.repeat) recurrence.push(`RRULE:FREQ=${FREQ[e.repeat]}`);
+    if (recurrence.length && e.except.length)
+      recurrence.push(
+        e.allDay
+          ? `EXDATE;VALUE=DATE:${e.except.map((d) => d.slice(0, 10).replace(/-/g, "")).join(",")}`
+          : `EXDATE:${e.except.map((x) => new Date(x).toISOString().replace(/[-:]|\.\d{3}/g, "")).join(",")}`,
+      );
+    await this.call("POST", `/calendars/${encodeURIComponent(calendarId)}/events/import`, {
+      iCalUID: e.uid,
+      summary: e.title,
+      location: e.location ?? "",
+      description: e.notes ?? "",
+      start: when(e.start),
+      end: when(e.end),
+      ...(recurrence.length ? { recurrence } : {}),
+    });
   }
 
   async remove(calendarId: string, eventId: string): Promise<void> {

@@ -7,7 +7,7 @@
  * Retry-After header and `retry_after`. Hearth acts on those (never on message text): it waits and
  * tries again for a short while, telling the page why, and otherwise says how long to wait.
  */
-import type { AiLoadedModel, AiModel, ChatMessage } from "../../shared/api";
+import type { AiLoadedModel, AiMachine, AiModel, ChatMessage } from "../../shared/api";
 import type { AiServer } from "../../shared/config";
 
 export interface Conn {
@@ -198,6 +198,74 @@ export async function serverVersion(c: Conn): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The computers a shared AI server lends work to, when it lists them for apps (`/api/machines`,
+ * or `/machines` under an OpenAI-compatible base). `null` when it doesn't: plain Ollama and most
+ * servers are one machine and have no such list.
+ */
+export async function listMachines(c: Conn): Promise<AiMachine[] | null> {
+  const path = c.server.kind === "ollama" ? "/api/machines" : "/machines";
+  let res: Response;
+  try {
+    res = await call(c, path, { headers: headers(c, false), timeoutMs: 5000 });
+  } catch (e) {
+    if (e instanceof AiError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+  const body = (await res.json().catch(() => null)) as { machines?: unknown } | null;
+  if (!body || !Array.isArray(body.machines)) return null;
+  return body.machines.flatMap((raw): AiMachine[] => {
+    const m = raw as Record<string, unknown>;
+    if (typeof m.id !== "string" || typeof m.name !== "string") return [];
+    const str = (v: unknown, n = 120) => (typeof v === "string" && v ? v.slice(0, n) : undefined);
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const hw = m.hardware as Record<string, unknown> | null | undefined;
+    const fetching = m.fetching as Record<string, unknown> | null | undefined;
+    return [
+      {
+        id: m.id.slice(0, 80),
+        name: m.name.slice(0, 80),
+        online: m.online === true,
+        available: m.available === true,
+        reason: str(m.reason, 200),
+        busy: m.busy === true,
+        jobs: num(m.jobs) ?? 0,
+        served: num(m.served) ?? 0,
+        avgMs: num(m.avgMs),
+        connectedSecs: num(m.connectedSecs),
+        version: str(m.version, 40),
+        os: str(m.os, 20),
+        models: Array.isArray(m.models)
+          ? m.models.filter((x): x is string => typeof x === "string").slice(0, 50)
+          : [],
+        loaded: str(m.loaded),
+        fetching:
+          fetching && typeof fetching.model === "string"
+            ? { model: fetching.model.slice(0, 120), percent: num(fetching.percent) ?? 0 }
+            : undefined,
+        address: str(m.address, 45),
+        mac: str(m.mac, 17)?.toLowerCase(),
+        canWake: m.canWake === true,
+        hardware:
+          hw && typeof hw.cpu === "string"
+            ? {
+                cpu: hw.cpu.slice(0, 120),
+                cores: num(hw.cores) ?? 0,
+                memoryMib: num(hw.memoryMib) ?? 0,
+                gpus: Array.isArray(hw.gpus)
+                  ? hw.gpus.flatMap((g: Record<string, unknown>) =>
+                      typeof g?.name === "string"
+                        ? [{ name: g.name.slice(0, 120), vramMib: num(g.vramMib) ?? 0 }]
+                        : [],
+                    )
+                  : [],
+              }
+            : undefined,
+      },
+    ];
+  });
 }
 
 // ---------------------------------------------------------------------------

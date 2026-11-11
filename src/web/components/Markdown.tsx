@@ -21,7 +21,7 @@ export function Markdown({ text }: { text: string }) {
       blocks.push(
         <pre
           key={key++}
-          className="my-2 overflow-x-auto rounded-xl bg-[var(--c-background)] p-3 text-[12.5px] leading-relaxed ring-1 ring-line"
+          className="my-2 overflow-x-auto rounded-xl bg-page p-3 text-[12.5px] leading-relaxed ring-1 ring-line"
         >
           {lang ? (
             <span className="mb-1 block text-[11px] font-semibold uppercase text-muted">
@@ -91,7 +91,7 @@ function inline(text: string): ReactNode[] {
     if ((m.index ?? 0) > last) out.push(text.slice(last, m.index));
     if (t.startsWith("`"))
       out.push(
-        <code key={k++} className="rounded bg-[var(--c-surface-2)] px-1 py-0.5 text-[0.9em]">
+        <code key={k++} className="rounded bg-(--c-surface-2) px-1 py-0.5 text-[0.9em]">
           {t.slice(1, -1)}
         </code>,
       );

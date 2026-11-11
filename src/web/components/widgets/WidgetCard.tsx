@@ -1,10 +1,9 @@
 /** One widget on the page: its card, kept current by the live socket. */
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Cpu, Sparkles } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
-  AiWidgetData,
   ClockWidgetData,
   CountdownWidgetData,
   NoteWidgetData,
@@ -28,13 +27,16 @@ import {
 import { cx } from "../../lib/format";
 import { useLive } from "../../lib/live";
 import { useHome } from "../../lib/queries";
+import { AiBody } from "./AiServers";
 import { Blocks } from "./Blocks";
+import { PinballBody } from "./Pinball";
 
 export const DEFAULT_TITLES: Record<WidgetType, string> = {
   status: "Services",
   note: "Note",
   countdown: "Coming up",
-  ai: "AI computers",
+  ai: "AI servers",
+  pinball: "Pinball",
   ask: "Ask",
   agenda: "Calendar",
   clock: "Clock",
@@ -54,7 +56,7 @@ export function WidgetCard({ widget, actions }: { widget: ViewWidget; actions?: 
   const stale = update?.type === "custom" && Object.values(update.data.sources).some((s) => !s.ok);
   return (
     <article
-      className="card widget-card relative flex h-full flex-col p-4 sm:p-[18px]"
+      className="card widget-card relative flex h-full flex-col p-4 sm:p-4.5"
       aria-label={widget.title ?? DEFAULT_TITLES[widget.type]}
     >
       <header className="mb-2.5 flex min-h-6 items-center justify-between gap-2">
@@ -95,6 +97,8 @@ function Body({ update }: { update: WidgetUpdate }) {
       return <CountdownBody d={update.data} />;
     case "ai":
       return <AiBody d={update.data} />;
+    case "pinball":
+      return <PinballBody d={update.data} />;
     case "ask":
       return <AskBody />;
     case "agenda":
@@ -169,10 +173,33 @@ function NoteBody({ d }: { d: NoteWidgetData }) {
 }
 
 function CountdownBody({ d }: { d: CountdownWidgetData }) {
-  if (!d.events.length) return <p className="text-sm text-muted">Nothing coming up.</p>;
+  const { data: home } = useHome();
+  const today = useMemo(() => startOfDay(new Date()), []);
+  const to = useMemo(() => addDays(today, 60), [today]);
+  const cal = useCalendar(today, to, d.calendar !== false && Boolean(home?.profile));
+  // The countdowns typed in, then what's next on the viewer's calendar, soonest first.
+  const day = 86_400_000;
+  const fromCalendar = (cal.data?.events ?? [])
+    .filter((e) => e.allDay || parseWhen(e.end).getTime() > Date.now())
+    .map((e) => {
+      const start = parseWhen(e.start);
+      const days = Math.round((startOfDay(start).getTime() - today.getTime()) / day);
+      return { name: e.title, date: dayKey(start), emoji: undefined, days: Math.max(0, days) };
+    });
+  const seen = new Set<string>();
+  const events = [...d.events, ...fromCalendar]
+    .filter((e) => {
+      const k = `${e.name}|${e.date}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .sort((a, b) => a.days - b.days)
+    .slice(0, Math.max(d.show ?? 3, d.events.length));
+  if (!events.length) return <p className="text-sm text-muted">Nothing coming up.</p>;
   return (
     <ul className="grid gap-2.5">
-      {d.events.map((e) => (
+      {events.map((e) => (
         <li key={`${e.name}-${e.date}`} className="flex items-center gap-3">
           <span className="w-8 text-center text-2xl" aria-hidden>
             {e.emoji ?? "📅"}
@@ -199,53 +226,6 @@ function CountdownBody({ d }: { d: CountdownWidgetData }) {
               </>
             )}
           </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function AiBody({ d }: { d: AiWidgetData }) {
-  const navigate = useNavigate();
-  if (!d.servers.length)
-    return (
-      <p className="text-sm text-muted">No AI servers yet. The admin adds them in Settings → AI.</p>
-    );
-  return (
-    <ul className="grid gap-2">
-      {d.servers.map((s) => (
-        <li key={s.id}>
-          <button
-            type="button"
-            onClick={() => navigate({ to: "/compute" })}
-            className="flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left hover:bg-[var(--c-surface-2)]"
-          >
-            <span
-              className={cx(
-                "grid size-9 place-items-center rounded-xl",
-                s.state === "up"
-                  ? "bg-good/15 text-good"
-                  : s.state === "busy"
-                    ? "bg-warn/15 text-warn"
-                    : "bg-bad/15 text-bad",
-              )}
-            >
-              <Cpu className="size-5" />
-            </span>
-            <span className="grid min-w-0 grow">
-              <span className="truncate font-semibold">{s.name}</span>
-              <span className="truncate text-[12.5px] text-muted">
-                {s.state === "up"
-                  ? `${s.models} model${s.models === 1 ? "" : "s"}${s.loaded.length ? ` · ${s.loaded.join(", ")} loaded` : ""}`
-                  : s.state === "busy"
-                    ? "Busy right now"
-                    : s.state === "down"
-                      ? "Not answering"
-                      : "Checking…"}
-              </span>
-            </span>
-            {s.ms ? <span className="text-[12px] tabular-nums text-muted">{s.ms} ms</span> : null}
-          </button>
         </li>
       ))}
     </ul>
@@ -297,9 +277,11 @@ function AgendaBody({ days }: { days: number }) {
   const { data: home } = useHome();
   const today = useMemo(() => startOfDay(new Date()), []);
   const to = useMemo(() => addDays(today, days), [today, days]);
-  const cal = useCalendar(today, to, Boolean(home?.profile));
+  const cal = useCalendar(today, to, Boolean(home?.profile && home.canCalendar));
   if (home && !home.profile)
     return <p className="text-[13.5px] text-muted">Pick who you are to see your calendar.</p>;
+  if (home && !home.canCalendar)
+    return <p className="text-[13.5px] text-muted">The calendar isn't turned on for you.</p>;
   if (cal.error) return <p className="text-[13.5px] text-bad">{(cal.error as Error).message}</p>;
   if (!cal.data) return <div className="skeleton h-20" />;
   const colors = new Map(cal.data.calendars.map((c) => [c.id, c.color]));
@@ -374,7 +356,7 @@ function AskBody() {
         onChange={(e) => setQ(e.target.value)}
         placeholder="Ask the home's AI anything…"
         aria-label="Ask the AI"
-        className="h-11 min-w-0 grow rounded-xl border border-line bg-[var(--c-background)] px-3 text-[15px] focus:border-accent focus:outline-none"
+        className="h-11 min-w-0 grow rounded-xl border border-line bg-page px-3 text-[15px] focus:border-accent focus:outline-none"
       />
       <button
         type="submit"
@@ -387,3 +369,5 @@ function AskBody() {
     </form>
   );
 }
+
+/** The admin's controls for the table: start one, mute, restart the frontend. */

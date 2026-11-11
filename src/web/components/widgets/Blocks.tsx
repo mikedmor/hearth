@@ -1,7 +1,17 @@
 /** Draws a custom widget's blocks. Everything arrives worked out; this only paints it. */
+import { CameraOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ResolvedBlock, Tone } from "../../../shared/widget-doc";
 import { cx } from "../../lib/format";
+import {
+  CalendarChart,
+  HeatmapChart,
+  PieChart,
+  ScatterChart,
+  TreemapChart,
+  WaterfallChart,
+} from "./cardkit/charts";
+import { XYChart } from "./cardkit/xychart";
 
 const TONE_TEXT: Record<Tone, string> = {
   normal: "text-ink",
@@ -41,7 +51,7 @@ export function Blocks({ blocks }: { blocks: ResolvedBlock[] }) {
   );
 }
 
-function BlockView({ b }: { b: ResolvedBlock }) {
+export function BlockView({ b }: { b: ResolvedBlock }) {
   switch (b.kind) {
     case "heading":
       return <h3 className={cx("text-[17px] font-bold", TONE_TEXT[b.tone])}>{b.text}</h3>;
@@ -62,6 +72,29 @@ function BlockView({ b }: { b: ResolvedBlock }) {
       );
     case "divider":
       return <hr className="border-line" />;
+    case "columns":
+    case "area":
+      return (
+        <XYChart
+          queries={[b.query]}
+          kind={b.kind === "area" ? "area" : "column"}
+          options={b.options}
+          references={b.options.references}
+          ariaLabel={b.title ?? "Chart"}
+        />
+      );
+    case "pie":
+      return <PieChart title={b.title} options={b.options} query={b.query} />;
+    case "treemap":
+      return <TreemapChart title={b.title} options={b.options} query={b.query} />;
+    case "heatmap":
+      return <HeatmapChart title={b.title} options={b.options} query={b.query} />;
+    case "scatter":
+      return <ScatterChart title={b.title} options={b.options} query={b.query} />;
+    case "waterfall":
+      return <WaterfallChart title={b.title} options={b.options} query={b.query} />;
+    case "calendar":
+      return <CalendarChart title={b.title} options={b.options} query={b.query} />;
     case "stat":
       return (
         <div className="grid gap-0.5">
@@ -107,7 +140,7 @@ function BlockView({ b }: { b: ResolvedBlock }) {
             <span className="text-muted tabular-nums">{b.detail ?? `${Math.round(pct)}%`}</span>
           </div>
           <div
-            className="h-2.5 overflow-hidden rounded-full bg-[var(--c-surface-2)]"
+            className="h-2.5 overflow-hidden rounded-full bg-(--c-surface-2)"
             role="progressbar"
             aria-valuenow={Math.round(pct)}
             aria-valuemin={0}
@@ -155,7 +188,7 @@ function BlockView({ b }: { b: ResolvedBlock }) {
                 <span className="truncate">{i.label}</span>
                 <span className="tabular-nums text-muted">{i.display}</span>
               </div>
-              <div className="h-2 rounded-full bg-[var(--c-surface-2)]">
+              <div className="h-2 rounded-full bg-(--c-surface-2)">
                 <div
                   className="h-full rounded-full"
                   style={{
@@ -274,8 +307,25 @@ function BlockView({ b }: { b: ResolvedBlock }) {
   }
 }
 
+/** "just now", "3 min ago", "2 h ago". */
+function ago(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  return h < 48 ? `${h} h ago` : `${Math.floor(h / 24)} days ago`;
+}
+
+/**
+ * A picture that refreshes (a camera's snapshot). Each new one is loaded in the background first,
+ * so a camera that stops answering keeps its last picture, dimmed and marked offline, instead of
+ * turning into a broken image; it's tried again on the usual schedule and comes back by itself.
+ */
 function LiveImage({ b }: { b: Extract<ResolvedBlock, { kind: "image" }> }) {
   const [tick, setTick] = useState(0);
+  const [shown, setShown] = useState<string | null>(null);
+  const [lastOk, setLastOk] = useState<number | null>(null);
+  const [failing, setFailing] = useState(false);
   useEffect(() => {
     const t = setInterval(
       () => document.visibilityState === "visible" && setTick((n) => n + 1),
@@ -283,22 +333,63 @@ function LiveImage({ b }: { b: Extract<ResolvedBlock, { kind: "image" }> }) {
     );
     return () => clearInterval(t);
   }, [b.every]);
+  useEffect(() => {
+    if (!b.src) return;
+    const url = `${b.src}&t=${tick}`;
+    const img = new Image();
+    let live = true;
+    img.onload = () => {
+      if (!live) return;
+      setShown(url);
+      setLastOk(Date.now());
+      setFailing(false);
+    };
+    img.onerror = () => live && setFailing(true);
+    img.src = url;
+    return () => {
+      live = false;
+    };
+  }, [b.src, tick]);
   if (!b.src)
     return (
       <div
-        className="grid place-items-center rounded-xl bg-[var(--c-surface-2)] text-[13px] text-muted"
+        className="grid place-items-center rounded-xl bg-(--c-surface-2) text-[13px] text-muted"
         style={{ height: b.height }}
       >
         The picture shows once the widget is saved.
       </div>
     );
+  if (!shown)
+    return failing ? (
+      <div
+        className="grid place-items-center content-center gap-1.5 rounded-xl bg-(--c-surface-2) px-4 text-center"
+        style={{ height: b.height }}
+      >
+        <CameraOff className="size-7 text-muted" />
+        <span className="text-[13.5px] font-semibold">Not answering right now</span>
+        <span className="text-[12px] text-muted">Trying again every {b.every} s</span>
+      </div>
+    ) : (
+      <div className="skeleton rounded-xl" style={{ height: b.height }} />
+    );
   return (
-    <img
-      src={`${b.src}&t=${tick}`}
-      alt={b.alt}
-      className="w-full rounded-xl bg-[var(--c-surface-2)]"
-      style={{ height: b.height, objectFit: b.fit }}
-    />
+    <div className="relative">
+      <img
+        src={shown}
+        alt={b.alt}
+        className={cx(
+          "w-full rounded-xl bg-(--c-surface-2) transition-[filter,opacity] duration-500",
+          failing && "opacity-45 grayscale",
+        )}
+        style={{ height: b.height, objectFit: b.fit }}
+      />
+      {failing ? (
+        <span className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full bg-black/65 px-2.5 py-1 text-[12px] font-semibold text-white backdrop-blur">
+          <CameraOff className="size-3.5" />
+          Offline{lastOk ? ` · last picture ${ago(Date.now() - lastOk)}` : ""}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -313,7 +404,7 @@ function Gauge({ b }: { b: Extract<ResolvedBlock, { kind: "gauge" }> }) {
     <div className="grid justify-items-center">
       <svg
         viewBox="0 0 100 58"
-        className="w-full max-w-[180px]"
+        className="w-full max-w-45"
         role="img"
         aria-label={`${b.label ?? "Gauge"}: ${b.display}${b.unit ?? ""}`}
       >

@@ -49,7 +49,7 @@ The live connection isn't getting through your reverse proxy. Turn on WebSocket 
 <summary><strong>A service I can open shows a red dot</strong></summary>
 
 - **An `https` address with your own certificate authority:** Hearth doesn't trust it yet. Mount the public root certificate and set `NODE_EXTRA_CA_CERTS` (see [HTTPS with your own certificate authority](install.md#https-with-your-own-certificate-authority)), or point the link's check at the service's plain `http` address on the NAS (the link's **More options**).
-- **A name only your computer knows** (in its hosts file, say): Hearth's server has to be able to find it too.
+- **A name only your computer knows** (in its hosts file, say): Hearth's server has to be able to find it too. `.local` names are the exception: Hearth asks the devices on your network for those itself, once it has found your network (a minute or two after it starts). Only plain `http` addresses work this way; for an `https` one, use the device's address or a `.home` name.
 - **Anything that answers counts as up**, even a sign-in page. A red dot means no answer at all, twice in a row.
 </details>
 

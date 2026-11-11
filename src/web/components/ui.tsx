@@ -22,8 +22,8 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 const VARIANTS: Record<Variant, string> = {
   primary: "bg-accent text-white shadow-sm hover:brightness-110 border border-transparent",
-  secondary: "bg-surface text-ink border border-line hover:border-[var(--c-line-strong)]",
-  ghost: "bg-transparent text-ink border border-transparent hover:bg-[var(--c-surface-2)]",
+  secondary: "bg-surface text-ink border border-line hover:border-(--c-line-strong)",
+  ghost: "bg-transparent text-ink border border-transparent hover:bg-(--c-surface-2)",
   danger: "bg-transparent text-bad border border-line hover:bg-bad/10",
 };
 
@@ -70,7 +70,7 @@ export function IconButton({
       title={label}
       {...rest}
       className={cx(
-        "inline-grid size-9 place-items-center rounded-full text-muted transition hover:bg-[var(--c-surface-2)] hover:text-ink disabled:opacity-40",
+        "inline-grid size-9 place-items-center rounded-full text-muted transition hover:bg-(--c-surface-2) hover:text-ink disabled:opacity-40",
         className,
       )}
     >
@@ -118,7 +118,7 @@ export function Field({
 }
 
 const inputClass =
-  "w-full rounded-xl border border-line bg-[var(--c-background)] px-3 py-2 text-[15px] text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-4 focus:ring-[var(--c-accent-soft)]";
+  "w-full rounded-xl border border-line bg-page px-3 py-2 text-[15px] text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-4 focus:ring-(--c-accent-soft)";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cx(inputClass, "h-10", props.className)} />;
@@ -169,13 +169,13 @@ export function Toggle({
         onClick={() => onChange(!checked)}
         className={cx(
           "relative h-6 w-11 flex-none rounded-full transition",
-          checked ? "bg-accent" : "bg-[var(--c-line-strong)]",
+          checked ? "bg-accent" : "bg-(--c-line-strong)",
         )}
       >
         <span
           className={cx(
             "absolute top-0.5 size-5 rounded-full bg-white shadow transition-all",
-            checked ? "left-[22px]" : "left-0.5",
+            checked ? "left-5.5" : "left-0.5",
           )}
         />
       </button>
@@ -198,7 +198,7 @@ export function Segmented<T extends string | number>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="flex flex-wrap gap-1 rounded-2xl border border-line bg-[var(--c-background)] p-1"
+      className="flex flex-wrap gap-1 rounded-2xl border border-line bg-page p-1"
     >
       {options.map((o) => (
         // biome-ignore lint/a11y/useSemanticElements: styled radio buttons inside a labelled radiogroup
@@ -314,11 +314,16 @@ export function Drawer({
   onClose,
   title,
   children,
+  wide,
+  footer,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  /** Room for a device's whole page. */
+  wide?: boolean;
+  footer?: ReactNode;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -337,7 +342,10 @@ export function Drawer({
       <aside
         role="dialog"
         aria-label={title}
-        className="card m-2 flex w-full max-w-[420px] flex-col overflow-hidden fade-in"
+        className={cx(
+          "card m-2 flex w-full flex-col overflow-hidden fade-in",
+          wide ? "max-w-2xl" : "max-w-105",
+        )}
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
           <h2 className="text-[17px] font-bold">{title}</h2>
@@ -346,6 +354,11 @@ export function Drawer({
           </IconButton>
         </div>
         <div className="grow overflow-y-auto px-5 py-4">{children}</div>
+        {footer ? (
+          <div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">
+            {footer}
+          </div>
+        ) : null}
       </aside>
     </div>,
     document.body,
@@ -369,7 +382,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div
         aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex flex-col items-center gap-2 px-4"
+        className="pointer-events-none fixed inset-x-0 bottom-4 z-60 flex flex-col items-center gap-2 px-4"
       >
         {toasts.map((t) => (
           <div

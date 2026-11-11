@@ -6,7 +6,9 @@
  * `secrets.json` and `auth.json`, so this one can be shown, shared and edited in the page.
  */
 import { z } from "zod";
+import { AccessSchema } from "./access";
 import { LookSchema, ThemeSchema } from "./themes";
+import { ENGINE_IDS, isSearchTemplate } from "./web-search";
 import { WidgetDocSchema } from "./widget-doc";
 
 export const CONFIG_VERSION = 3;
@@ -31,6 +33,7 @@ export const RESERVED_PATHS = new Set([
   "setup",
   "chat",
   "compute",
+  "devices",
   "widgets",
   "themes",
   "settings",
@@ -45,7 +48,7 @@ export const RESERVED_PATHS = new Set([
  * What new ids and short links avoid: the reserved paths and pages added since. Those are kept
  * out of RESERVED_PATHS so a config with a tile called "calendar" still loads; the page wins.
  */
-export const PAGE_PATHS = new Set([...RESERVED_PATHS, "calendar"]);
+export const PAGE_PATHS = new Set([...RESERVED_PATHS, "calendar", "family", "welcome"]);
 
 export const Audience = z.enum(["everyone", "adults", "admin"]);
 export type Audience = z.infer<typeof Audience>;
@@ -135,6 +138,8 @@ export const WidgetSchema = z.discriminatedUnion("type", [
         )
         .max(30),
       show: z.number().int().min(1).max(8).default(3),
+      /** Also what's next on the viewer's own calendar. */
+      calendar: z.boolean().default(true),
     }),
   }),
   /** The time here, and in other places (family abroad, a server's time zone). */
@@ -155,6 +160,13 @@ export const WidgetSchema = z.discriminatedUnion("type", [
   }),
   /** The AI servers at a glance: up, busy, models loaded. */
   z.object({ ...widgetBase, type: z.literal("ai") }),
+  /** A pinball table running VPin Studio: what's being played, high scores, players. */
+  z.object({
+    ...widgetBase,
+    type: z.literal("pinball"),
+    /** Which table (a saved device's id); the first one found when left out. */
+    options: z.object({ device: z.string().max(64).optional() }).prefault({}),
+  }),
   /** A quick box to ask the AI, which opens the chat. */
   z.object({ ...widgetBase, type: z.literal("ask") }),
   /** What's on the viewer's own calendar: each person sees theirs. */
@@ -195,6 +207,16 @@ export const LayoutSchema = z.object({
   widgets: z
     .array(z.object({ id: slug, w: z.union(WIDGET_WIDTHS.map((n) => z.literal(n))).default(4) }))
     .default([]),
+  /**
+   * Sections and widgets in one order, for widgets mixed in with the sections: "g:<section>" and
+   * "w:<widget>". Ones not listed are spread in evenly.
+   */
+  board: z.array(z.string().max(80)).max(400).default([]),
+  /**
+   * Board keys linked to the one before them on the board: a run of linked ones moves as one and
+   * stays together (a webcam beside its camera link) on every screen.
+   */
+  joined: z.array(z.string().max(80)).max(400).default([]),
 });
 export type Layout = z.infer<typeof LayoutSchema>;
 
@@ -218,6 +240,10 @@ export const ProfileSchema = z.object({
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
+/** Only the admin changes this page. A child's page always is: the admin sets it up for them. */
+export const isLocked = (p: Pick<Profile, "locked" | "role">): boolean =>
+  p.locked || p.role === "child";
+
 // ---------------------------------------------------------------------------
 // AI servers
 
@@ -240,6 +266,27 @@ export const SettingsSchema = z.object({
   /** For numbers and dates in widgets. */
   locale: z.string().max(20).default("en-US"),
   timeZone: z.string().max(60).optional(),
+  /**
+   * Searching the web from the search box: the engine everyone uses unless they pick their own.
+   * "custom" is your own (SearXNG, Whoogle…): `url` with %s where the search goes.
+   */
+  webSearch: z
+    .object({
+      engine: z.enum([...ENGINE_IDS, "custom", "off"]).default("google"),
+      name: z.string().trim().max(40).optional(),
+      url: z
+        .string()
+        .trim()
+        .max(300)
+        .refine(isSearchTemplate, "an http(s) address with %s where the search goes")
+        .optional(),
+    })
+    .prefault({}),
+  /**
+   * Ask GitHub once a day whether there's a newer release (the admin sees it in Settings). Off
+   * until the admin turns it on: it's a call to the internet.
+   */
+  updates: z.object({ check: z.boolean().default(false) }).prefault({}),
   /** What a visitor who hasn't picked a profile sees. */
   guest: z
     .object({ look: LookSchema.prefault({}), layout: LayoutSchema.prefault({}) })
@@ -255,6 +302,92 @@ export const SettingsSchema = z.object({
     .object({
       /** Let widget sources reach the internet (weather, public APIs). Off: home network only. */
       allowInternet: z.boolean().default(false),
+      /**
+       * Proxies whose X-Forwarded-For is believed, besides this machine and container bridges
+       * (172.16.0.0/12): addresses or ranges like 192.168.1.20/32.
+       */
+      trustedProxies: z.array(z.string().max(45)).max(10).default([]),
+    })
+    .prefault({}),
+  /**
+   * The home's smart-home hubs: where each is. Their tokens are the secrets "smarthome:openhab"
+   * and "smarthome:homeassistant".
+   */
+  smarthome: z
+    .object({
+      openhab: z.object({ url: z.string().max(300) }).optional(),
+      homeassistant: z.object({ url: z.string().max(300) }).optional(),
+    })
+    .prefault({}),
+  /**
+   * The router, for the network map (a GL.iNet router, firmware 4): its admin page's address.
+   * Its admin password is the secret "router:password".
+   */
+  router: z.object({ url: z.string().max(300).optional() }).prefault({}),
+  /**
+   * Which roles may use each feature (chat's is `ai.chatRoles`). The admin, signed in, always
+   * may. Files is off for children until the admin turns it on.
+   */
+  features: z
+    .object({
+      files: z.array(Role).default(["admin", "adult"]),
+      calendar: z.array(Role).default(["admin", "adult", "child"]),
+    })
+    .prefault({}),
+  /**
+   * Files: the NAS's shared folders, each person through their own NAS account. `url` is
+   * DSM's address (https://nas.home, or http://192.168.1.20:5000); `smbHost` the name devices map
+   * shares by (the address's own name when empty).
+   */
+  files: z
+    .object({
+      url: z.string().max(300).optional(),
+      smbHost: z.string().max(200).optional(),
+    })
+    .prefault({}),
+  /** Sign-ins Hearth keeps for apps on the network (each key is a secret, access:<id>). */
+  access: z.array(AccessSchema).max(100).default([]),
+  /** Services the admin added by hand (the port checks didn't find them). */
+  services: z
+    .array(
+      z.object({
+        app: z.string().max(40),
+        url: z.string().url().max(300),
+        name: z.string().trim().max(60).optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
+  /** AdGuard Home on the router: where it is. Its password is the secret "adguard:password". */
+  adguard: z
+    .object({
+      url: z.string().max(300).optional(),
+      username: z.string().max(100).optional(),
+    })
+    .prefault({}),
+  /**
+   * Single sign-on through the home's identity provider (Pocket ID, Authentik…): OpenID Connect.
+   * The client's secret, if it has one, is the secret "sso:client-secret".
+   */
+  sso: z
+    .object({
+      /** The provider's address, like https://id.home. */
+      issuer: z.string().url().max(300).optional(),
+      clientId: z.string().max(200).optional(),
+      /** The button says "Sign in with …". */
+      label: z.string().max(40).default("Pocket ID"),
+      /** People in this group at the provider also get the admin's session. */
+      adminGroup: z.string().max(100).optional(),
+    })
+    .prefault({}),
+  /** The trust page (start.home/trust) and moving to https. */
+  trust: z
+    .object({
+      /**
+       * A page opened over plain http by name quietly tries https; a device that trusts the home's
+       * root moves there, one that doesn't sees a banner leading to the trust page.
+       */
+      redirect: z.boolean().default(true),
     })
     .prefault({}),
   /** Calendars. */
@@ -425,10 +558,28 @@ export function isLocalUrl(address: string): boolean {
 
 /**
  * Whether the server checks this tile: switched on, and on the home network. Someone's own links
- * aren't checked: the status map goes to every page, and their ids are private.
+ * are checked too; their status only goes to their own page (see `statusFor`).
  */
-export function isChecked(tile: Pick<Tile, "check" | "url" | "checkUrl" | "owner">): boolean {
-  return tile.check && !tile.owner && isLocalUrl(tile.checkUrl ?? tile.url);
+export function isChecked(tile: Pick<Tile, "check" | "url" | "checkUrl">): boolean {
+  return tile.check && isLocalUrl(tile.checkUrl ?? tile.url);
+}
+
+/**
+ * The status a page may see: the house's links, and only this person's own. Someone else's
+ * links (even their ids) never reach it.
+ */
+export function statusFor<T>(
+  status: Record<string, T>,
+  tiles: Pick<Tile, "id" | "owner">[],
+  profile: string | null,
+): Record<string, T> {
+  const owner = new Map(tiles.map((t) => [t.id, t.owner]));
+  return Object.fromEntries(
+    Object.entries(status).filter(([id]) => {
+      const o = owner.get(id);
+      return !o || o === profile;
+    }),
+  );
 }
 
 /** Whether someone with this role (or a guest, `null`) may see something for this audience. */

@@ -1,4 +1,5 @@
 /** Builds what one person (or a guest) sees: layouts, looks, audiences, and what they may change. */
+
 import type {
   Access,
   HomeView,
@@ -13,6 +14,7 @@ import {
   type Group,
   type HearthConfig,
   isChecked,
+  isLocked,
   type Layout,
   type Profile,
   type Role,
@@ -22,6 +24,7 @@ import {
   visibleTo,
   type Widget,
 } from "../shared/config";
+import { pickWebSearch } from "../shared/web-search";
 import { iconColor, resolveIcon } from "./icons";
 
 /** Who sees something, as the page shows it. */
@@ -40,7 +43,9 @@ export function mayManage(
   who: { admin: boolean; profile: Profile | null },
 ): boolean {
   if (who.admin) return true;
-  return Boolean(item.owner && who.profile && !who.profile.locked && item.owner === who.profile.id);
+  return Boolean(
+    item.owner && who.profile && !isLocked(who.profile) && item.owner === who.profile.id,
+  );
 }
 
 export function toViewTile(tile: Tile, canManage = false): ViewTile {
@@ -92,6 +97,16 @@ export function visibleWidgets(cfg: HearthConfig, profile: Profile | null): Widg
     .filter((w): w is Widget => w !== undefined && canSee(w.audience, role));
 }
 
+/** Whether this person may use a feature: by their role, or as the admin, signed in. */
+export function mayUse(
+  cfg: HearthConfig,
+  feature: "files" | "calendar",
+  role: Role | null,
+  admin: boolean,
+): boolean {
+  return admin || (role !== null && cfg.settings.features[feature].includes(role));
+}
+
 export function canChat(cfg: HearthConfig, role: Role | null): boolean {
   return (
     role !== null && cfg.settings.ai.servers.length > 0 && cfg.settings.ai.chatRoles.includes(role)
@@ -112,7 +127,7 @@ export function buildHomeView(cfg: HearthConfig, ctx: ViewContext): HomeView {
   const hiddenTiles = new Set(profile?.hiddenTiles ?? []);
   const hiddenGroups = new Set(profile?.hiddenGroups ?? []);
   const tiles = visibleTiles(cfg, viewer).filter((t) => !hiddenTiles.has(t.id));
-  const canEdit = session.admin || (profile !== null && !profile.locked);
+  const canEdit = session.admin || (profile !== null && !isLocked(profile));
   const canAddOwn = profile !== null && canEdit;
 
   const order = profile?.groupOrder ?? [];
@@ -155,12 +170,18 @@ export function buildHomeView(cfg: HearthConfig, ctx: ViewContext): HomeView {
     homeName: cfg.settings.homeName,
     session,
     profile: profile
-      ? { ...publicProfile(profile, ctx.hasPin(profile.id)), locked: profile.locked }
+      ? { ...publicProfile(profile, ctx.hasPin(profile.id)), locked: isLocked(profile) }
       : null,
     profiles: cfg.profiles.map((p) => publicProfile(p, ctx.hasPin(p.id))),
     canEdit,
     canAddOwn,
     canChat: canChat(cfg, role),
+    canFiles: mayUse(cfg, "files", role, session.admin),
+    canCalendar: role !== null && mayUse(cfg, "calendar", role, session.admin),
+    webSearch: pickWebSearch(
+      cfg.settings.webSearch,
+      (profile ? profile.look : cfg.settings.guest.look).search,
+    ),
     look: profile ? profile.look : cfg.settings.guest.look,
     themes: cfg.themes,
     sections: layout.sections,
@@ -170,6 +191,8 @@ export function buildHomeView(cfg: HearthConfig, ctx: ViewContext): HomeView {
     groupOrder: profile?.groupOrder ?? [],
     groups,
     widgets,
+    board: layout.board,
+    joined: layout.joined,
     library,
   };
 }

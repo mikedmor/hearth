@@ -10,17 +10,19 @@
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Palette, Pencil, Shapes } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HomeView, ViewGroup } from "../../shared/api";
 import { CommandSearch } from "../components/CommandSearch";
 import { EditBar, EditDock, EditLauncher, EditRail } from "../components/EditMode";
 import { FindServices } from "../components/FindServices";
 import { Dock, GroupCards, GroupIcons, GroupRows, useQuickKeys } from "../components/Launcher";
+import { Masonry } from "../components/Masonry";
 import { contextFromView, useTileEditors } from "../components/TileEditors";
 import { useToast } from "../components/ui";
 import { WidgetGallery } from "../components/WidgetGallery";
 import { WidgetCard } from "../components/widgets/WidgetCard";
 import { api } from "../lib/api";
+import { type BoardItem, boardItems, boardRuns, itemWeight } from "../lib/board";
 import { cx, greeting } from "../lib/format";
 import { useLive } from "../lib/live";
 import { keys } from "../lib/queries";
@@ -136,7 +138,7 @@ function Strip({
             aria-label="Customize the look"
             className="grid size-9 place-items-center rounded-full text-muted hover:bg-(--c-surface-2) hover:text-ink"
           >
-            <Palette className="size-[18px]" />
+            <Palette className="size-4.5" />
           </button>
           <button
             type="button"
@@ -175,7 +177,7 @@ function Groups({ view, phone }: { view: HomeView; phone?: boolean }) {
   if (style === "icons")
     return (
       <Masonry
-        groups={view.groups}
+        items={view.groups}
         minWidth={300}
         weight={(g) => Math.ceil(g.tiles.length / 3) * 2 + 1}
         render={(g) => <GroupIcons key={g.id} group={g} />}
@@ -191,7 +193,7 @@ function Groups({ view, phone }: { view: HomeView; phone?: boolean }) {
     );
   return (
     <Masonry
-      groups={view.groups}
+      items={view.groups}
       minWidth={230}
       weight={(g) => g.tiles.length + 1.2}
       render={(g) => <GroupRows key={g.id} group={g} />}
@@ -199,57 +201,60 @@ function Groups({ view, phone }: { view: HomeView; phone?: boolean }) {
   );
 }
 
-/**
- * Groups packed into as many columns as fit, each next group going into the shortest column, so
- * the whole width is used and nothing waits below the fold that could sit beside it.
- */
-function Masonry({
-  groups,
-  minWidth,
-  weight,
-  render,
-}: {
-  groups: ViewGroup[];
-  minWidth: number;
-  weight: (g: ViewGroup) => number;
-  render: (g: ViewGroup) => React.ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [cols, setCols] = useState(3);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 12;
-    const measure = () =>
-      setCols(Math.max(1, Math.floor((el.clientWidth + gap) / (minWidth + gap))));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [minWidth]);
-  const columns: ViewGroup[][] = Array.from(
-    { length: Math.min(cols, Math.max(1, groups.length)) },
-    () => [],
-  );
-  const heights = columns.map(() => 0);
-  for (const g of groups) {
-    const i = heights.indexOf(Math.min(...heights));
-    columns[i]?.push(g);
-    heights[i] = (heights[i] ?? 0) + weight(g);
-  }
+/** Sections and widgets packed together, in the person's order: no rail. */
+function Board({ view, showWidgets }: { view: HomeView; showWidgets: boolean }) {
+  const style = view.look.launcher;
+  const items = boardItems(view.groups, showWidgets ? view.widgets : [], view.board);
+  if (!items.length)
+    return (
+      <p className="p-6 text-center text-muted">
+        {view.canEdit
+          ? "Nothing here yet. Press Edit to add tiles and widgets, or to find the services on your network."
+          : "Nothing here yet."}
+      </p>
+    );
+  const groupWeight = (g: ViewGroup) =>
+    style === "icons" ? Math.ceil(g.tiles.length / 3) * 2 + 1 : g.tiles.length + 1.2;
+  const one = (i: BoardItem) =>
+    i.kind === "widget" ? (
+      <div key={i.key} className="mb-(--gap)">
+        <WidgetCard widget={i.widget} />
+      </div>
+    ) : style === "icons" ? (
+      <GroupIcons key={i.key} group={i.group} />
+    ) : style === "cards" ? (
+      <GroupCards key={i.key} group={i.group} />
+    ) : (
+      <GroupRows key={i.key} group={i.group} />
+    );
   return (
-    <div ref={ref} className="flex items-start gap-(--gap)">
-      {columns.map((col, i) => (
-        <div key={i} className="min-w-0 flex-1">
-          {col.map(render)}
-        </div>
-      ))}
-    </div>
+    <Masonry
+      items={boardRuns(items, view.joined)}
+      minWidth={280}
+      weight={(run) => run.reduce((n, i) => n + itemWeight(i, groupWeight), 0)}
+      render={(run) =>
+        run.length === 1 ? one(run[0] as BoardItem) : <div key={run[0]?.key}>{run.map(one)}</div>
+      }
+    />
   );
 }
 
-function Rail({ view }: { view: HomeView }) {
-  if (!view.widgets.length) {
+/**
+ * On a phone, with widgets mixed in: sections and the widgets linked to them go on the Apps page,
+ * together; the other widgets (linked ones still together) on the Widgets page.
+ */
+function phoneRuns(view: HomeView): { apps: BoardItem[][]; widgets: BoardItem[] } {
+  const runs = boardRuns(boardItems(view.groups, view.widgets, view.board), view.joined);
+  const withSection = (r: BoardItem[]) => r.some((i) => i.kind === "group");
+  return {
+    apps: runs.filter(withSection),
+    widgets: runs.filter((r) => !withSection(r)).flat(),
+  };
+}
+
+function Rail({ view, widgets: only }: { view: HomeView; widgets?: HomeView["widgets"] }) {
+  const widgets = only ?? view.widgets;
+  if (!widgets.length) {
     return (
       <p className="card p-5 text-center text-sm text-muted">
         No widgets yet.{view.canEdit ? " Add some with Edit." : ""}
@@ -263,7 +268,7 @@ function Rail({ view }: { view: HomeView }) {
         view.look.railWidth === "wide" && "2xl:grid-cols-2",
       )}
     >
-      {view.widgets.map((w) => (
+      {widgets.map((w) => (
         <div
           key={w.id}
           className={cx(view.look.railWidth === "wide" && w.w >= 8 && "2xl:col-span-2")}
@@ -304,6 +309,8 @@ export function CommandLayout({
   useQuickKeys(editing ? [] : view.favorites);
   const shown = (k: string) => !view.sections.find((s) => s.kind === k)?.hidden;
   const showRail = shown("widgets") && view.look.rail !== "off";
+  /** Widgets mixed in with the sections, in one order (on a wide screen). */
+  const mixed = view.look.rail === "mixed";
   const showFavs = shown("favorites") && view.favorites.length > 0;
   const showGroups = shown("groups");
 
@@ -331,18 +338,6 @@ export function CommandLayout({
   );
 
   if (editing) {
-    const columns = (
-      groups: ViewGroup[],
-      render: (g: ViewGroup) => React.ReactNode,
-      folded: boolean,
-    ) => (
-      <Masonry
-        groups={groups}
-        minWidth={240}
-        weight={folded ? () => 1 : (g) => g.tiles.length + 1.5}
-        render={render}
-      />
-    );
     return (
       <>
         <main className={cx("shell", wide ? "command flex flex-col" : "pb-10")}>
@@ -354,23 +349,19 @@ export function CommandLayout({
             onLook={onLook}
             onDone={onDone}
           />
-          <div className={cx("gap-(--gap)", wide ? "flex min-h-0 grow" : "grid")}>
-            <section
-              aria-label="Services"
-              className={cx("min-w-0", wide && "cmd-scroll min-h-0 grow overflow-y-auto pb-6")}
-            >
+          <div className={cx("gap-(--gap)", wide ? "flex grow items-start" : "grid")}>
+            <section aria-label="Services" className={cx("min-w-0", wide && "grow pb-6")}>
               <EditDock view={view} />
-              <EditLauncher view={view} edit={edit} columns={columns} />
+              <EditLauncher view={view} edit={edit} mixed={mixed && wide} />
             </section>
-            <aside
-              aria-label="Widgets"
-              className={cx(
-                wide &&
-                  "cmd-scroll min-h-0 w-[clamp(300px,24vw,380px)] flex-none overflow-y-auto pb-6",
-              )}
-            >
-              <EditRail view={view} onAdd={() => setGallery(true)} />
-            </aside>
+            {mixed && wide ? null : (
+              <aside
+                aria-label="Widgets"
+                className={cx(wide && "w-[clamp(300px,24vw,380px)] flex-none pb-6")}
+              >
+                <EditRail view={view} onAdd={() => setGallery(true)} />
+              </aside>
+            )}
           </div>
         </main>
         {dialogs}
@@ -379,31 +370,36 @@ export function CommandLayout({
   }
 
   if (wide) {
-    const rail = showRail ? (
-      <aside
-        aria-label="Widgets"
-        className={cx(
-          "cmd-scroll min-h-0 flex-none overflow-y-auto pb-6",
-          view.look.railWidth === "wide"
-            ? "w-[clamp(340px,32vw,640px)]"
-            : "w-[clamp(300px,24vw,380px)]",
-        )}
-      >
-        <Rail view={view} />
-      </aside>
-    ) : null;
+    const rail =
+      showRail && !mixed ? (
+        <aside
+          aria-label="Widgets"
+          className={cx(
+            "flex-none pb-6",
+            view.look.railWidth === "wide"
+              ? "w-[clamp(340px,32vw,640px)]"
+              : "w-[clamp(300px,24vw,380px)]",
+          )}
+        >
+          <Rail view={view} />
+        </aside>
+      ) : null;
     return (
       <>
         <main className="shell command flex flex-col">
           <Strip view={view} onEdit={onEdit} onLook={onLook} />
-          <div className="flex min-h-0 grow gap-(--gap)">
+          <div className="flex grow items-start gap-(--gap)">
             {view.look.rail === "left" ? rail : null}
-            <section
-              aria-label="Services"
-              className="cmd-scroll min-h-0 min-w-0 grow overflow-y-auto pb-6"
-            >
+            <section aria-label="Services" className="min-w-0 grow pb-6">
               {showFavs ? <Dock tiles={view.favorites} className="card mb-(--gap) p-1.5" /> : null}
-              {showGroups ? <Groups view={view} /> : null}
+              {mixed ? (
+                <Board
+                  view={showGroups ? view : { ...view, groups: [] }}
+                  showWidgets={shown("widgets")}
+                />
+              ) : showGroups ? (
+                <Groups view={view} />
+              ) : null}
             </section>
             {view.look.rail !== "left" ? rail : null}
           </div>
@@ -446,6 +442,8 @@ function PhoneLayout({
   const pager = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(0);
   const dock = showFavs && view.look.dock;
+  // Widgets mixed in with the sections: linked ones follow their section onto the Apps page.
+  const split = view.look.rail === "mixed" && view.groups.length ? phoneRuns(view) : null;
   const go = (n: number) =>
     pager.current?.scrollTo({ left: n * pager.current.clientWidth, behavior: "smooth" });
   return (
@@ -490,11 +488,40 @@ function PhoneLayout({
           {showFavs && !dock ? (
             <Dock tiles={view.favorites} numbered={false} className="card mb-3 p-1" />
           ) : null}
-          {showGroups ? <Groups view={view} phone={view.look.launcher !== "cards"} /> : null}
+          {showGroups ? (
+            split ? (
+              split.apps.map((run) => (
+                <div key={run[0]?.key}>
+                  {run.map((i) =>
+                    i.kind === "group" ? (
+                      view.look.launcher === "cards" ? (
+                        <GroupCards key={i.key} group={i.group} />
+                      ) : (
+                        <GroupIcons key={i.key} group={i.group} plain />
+                      )
+                    ) : showRail ? (
+                      <div key={i.key} className="mb-3">
+                        <WidgetCard widget={i.widget} />
+                      </div>
+                    ) : null,
+                  )}
+                </div>
+              ))
+            ) : (
+              <Groups view={view} phone={view.look.launcher !== "cards"} />
+            )
+          ) : null}
         </section>
         {showRail ? (
           <section aria-label="Widgets" className="pager-page">
-            <Rail view={view} />
+            <Rail
+              view={view}
+              widgets={
+                split && showGroups
+                  ? split.widgets.flatMap((i) => (i.kind === "widget" ? [i.widget] : []))
+                  : undefined
+              }
+            />
           </section>
         ) : null}
       </div>

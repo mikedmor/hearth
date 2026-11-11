@@ -40,6 +40,23 @@
   --c-surface-2: color-mix(in oklab, var(--c-surface) 82%, var(--c-text));
   --c-line-strong: color-mix(in oklab, var(--c-border) 60%, var(--c-text));
   --c-accent-soft: color-mix(in oklab, var(--c-accent) 16%, transparent);
+  /* Chart colors (Muny's card kit), from the theme: six series, two mixed from them, and roles. */
+  --viz-series-1: var(--c-chart1);
+  --viz-series-2: var(--c-chart2);
+  --viz-series-3: var(--c-chart3);
+  --viz-series-4: var(--c-chart4);
+  --viz-series-5: var(--c-chart5);
+  --viz-series-6: var(--c-chart6);
+  --viz-series-7: color-mix(in oklab, var(--c-chart1) 50%, var(--c-chart3));
+  --viz-series-8: color-mix(in oklab, var(--c-chart2) 50%, var(--c-chart5));
+  --viz-other: color-mix(in oklab, var(--c-muted) 60%, var(--c-surface));
+  --viz-positive: var(--c-positive);
+  --viz-negative: var(--c-negative);
+  --viz-warning: var(--c-warning);
+  --viz-muted: var(--c-muted);
+  --viz-grid: color-mix(in oklab, var(--c-border) 70%, transparent);
+  --viz-axis: var(--c-line-strong);
+  --viz-surface: var(--c-surface);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 10px 28px -16px rgb(0 0 0 / 0.35);
   --shadow-hover: 0 2px 6px rgb(0 0 0 / 0.08), 0 22px 44px -18px rgb(0 0 0 / 0.45);
 }
@@ -462,9 +479,10 @@ h3,
 
 /* ------------------------------------------------------------------ Command center */
 
-/* The page fits the window: the strip on top, the launcher and widget rail below it. */
+/* The strip on top, the launcher and widget rail below it, filling at least the window. The page
+   scrolls as one: neither column scrolls inside itself. */
 .command {
-  height: calc(100dvh - 64px);
+  min-height: calc(100dvh - 64px);
 }
 .cmd-scroll {
   scrollbar-width: thin;

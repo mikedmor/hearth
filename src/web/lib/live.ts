@@ -5,6 +5,9 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { LiveServerMessage, StatusMap, WidgetUpdate } from "../../shared/api";
 
+/** What the server says changed. */
+type Changed = Extract<LiveServerMessage, { type: "changed" }>["what"];
+
 type Listener = () => void;
 
 class LiveStore {
@@ -16,7 +19,7 @@ class LiveStore {
   private watching: string[] = [];
   private retry = 0;
   private timer: number | undefined;
-  private onChanged = new Set<(what: "config" | "session" | "calendar") => void>();
+  private onChanged = new Set<(what: Changed) => void>();
   private version = 0;
 
   subscribe = (fn: Listener) => {
@@ -32,7 +35,7 @@ class LiveStore {
     for (const fn of this.listeners) fn();
   }
 
-  changes(fn: (what: "config" | "session" | "calendar") => void): () => void {
+  changes(fn: (what: Changed) => void): () => void {
     this.onChanged.add(fn);
     return () => this.onChanged.delete(fn);
   }
@@ -57,6 +60,30 @@ class LiveStore {
     } catch {
       // Offline: keep the last dots.
     }
+  }
+
+  /**
+   * Someone else is using the page now (another profile): connect again as them, so the status
+   * they get is theirs (their own links), and the last person's goes.
+   */
+  private who: string | null | undefined;
+  reconnectAs(profile: string | null): void {
+    if (this.who === undefined) {
+      this.who = profile;
+      return;
+    }
+    if (this.who === profile) return;
+    this.who = profile;
+    this.status = {};
+    this.retry = 0;
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onclose = null;
+      old.close();
+    }
+    clearTimeout(this.timer);
+    this.connect();
   }
 
   private connect() {

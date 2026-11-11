@@ -4,33 +4,45 @@ import {
   createRouter,
   Link,
   Outlet,
+  redirect,
   useRouterState,
 } from "@tanstack/react-router";
 import {
   Bot,
   CalendarDays,
-  Cpu,
+  FolderOpen,
+  HeartHandshake,
   House,
   LayoutGrid,
   LogIn,
   LogOut,
   MessageSquare,
+  MonitorSmartphone,
   Settings,
   UserRound,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PublicProfile } from "../shared/api";
 import { AdminSignIn } from "./components/AdminSignIn";
-import { Avatar, Picker } from "./components/Picker";
-import { Spinner } from "./components/ui";
+import { FamilyAlerts, HereBanner } from "./components/internet/HereBanner";
+import { Avatar, NOT_OWNER, Picker } from "./components/Picker";
+import { TrustNudge } from "./components/TrustNudge";
+import { Spinner, useToast } from "./components/ui";
 import { api, local } from "./lib/api";
 import { cx } from "./lib/format";
+import { live } from "./lib/live";
 import { applyLook } from "./lib/look";
 import { useHome, useLiveRefresh, useRefresh } from "./lib/queries";
+import { useReportTrust } from "./lib/trust";
 import { CalendarPage } from "./pages/CalendarPage";
 import { ChatPage } from "./pages/ChatPage";
-import { ComputePage } from "./pages/ComputePage";
+import { DevicesPage } from "./pages/DevicesPage";
+import { ChildPage, FamilyPage } from "./pages/FamilyPage";
+import { FilesPage } from "./pages/FilesPage";
 import { HomePage } from "./pages/HomePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { TrustPage } from "./pages/TrustPage";
+import { WelcomePage } from "./pages/WelcomePage";
 import { WidgetEditorPage } from "./pages/WidgetEditorPage";
 import { WidgetsPage } from "./pages/WidgetsPage";
 
@@ -40,7 +52,16 @@ function Shell() {
   const home = useHome();
   const refresh = useRefresh();
   useLiveRefresh();
+  useReportTrust(home.data?.trustKnown);
+  // A new person on this page: the live socket reconnects as them (their own links' status).
+  const who = home.data ? (home.data.profile?.id ?? null) : undefined;
+  useEffect(() => {
+    if (who !== undefined) live.reconnectAs(who);
+  }, [who]);
   const [picker, setPicker] = useState(false);
+  const [startWith, setStartWith] = useState<PublicProfile | undefined>(undefined);
+  const toast = useToast();
+  const tried = useRef(false);
   const [signIn, setSignIn] = useState(false);
   const path = useRouterState({ select: (s) => s.location.pathname });
 
@@ -59,16 +80,57 @@ function Shell() {
       link.rel = "stylesheet";
       document.head.append(link);
     }
-    link.href = `/api/look.css?v=${encodeURIComponent(view.look.css.length + view.look.css.slice(0, 40) + (view.profile?.id ?? "guest"))}`;
+    // Only when it changes: setting it again reloads the stylesheet, and while it reloads the page
+    // loses its styles for a moment (and the place it was scrolled to).
+    const href = `/api/look.css?v=${encodeURIComponent(view.look.css.length + view.look.css.slice(0, 40) + (view.profile?.id ?? "guest"))}`;
+    if (link.getAttribute("href") !== href) link.href = href;
     document.title = view.title;
     return () => mq.removeEventListener("change", onChange);
   }, [view]);
 
-  // A device's first visit: ask who's here.
+  // A device's first visit: ask who's here. Not on the pages a stranger's device opens (the
+  // front door's welcome, the trust page): there the question is in the way.
+  const visitorPage = path.startsWith("/welcome") || path.startsWith("/trust");
   useEffect(() => {
-    if (!view || view.profile || view.profiles.length === 0) return;
+    if (!view || view.profile || view.profiles.length === 0 || visitorPage) return;
+    // Someone's own device opens their page: straight away, or at their PIN pad. Once per visit,
+    // and not after they said it isn't them.
+    const owner = view.deviceOwner && view.profiles.find((p) => p.id === view.deviceOwner);
+    if (owner && !tried.current && local.get(NOT_OWNER, "") !== owner.id) {
+      tried.current = true;
+      if (owner.hasPin) {
+        setStartWith(owner);
+        setPicker(true);
+      } else
+        void api
+          .post("/api/profile", { id: owner.id })
+          .then(() => refresh())
+          .catch(() => setPicker(true));
+      return;
+    }
     if (!local.get(VISITED, false)) setPicker(true);
-  }, [view]);
+  }, [view, visitorPage, refresh]);
+
+  // Back from signing in with the home's identity provider: say how it went.
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const sso = q.get("sso");
+    if (!sso) return;
+    const who = q.get("who");
+    const why = q.get("why");
+    const said: Record<string, string> = {
+      ok: "Signed in",
+      admin: "Signed in as the admin",
+      linked: "Linked: that account opens this page from now on",
+      unlinked: `${who ? `${who} isn't` : "That account isn't"} linked to anyone here yet. The admin links accounts in Settings → People.`,
+      error: `Signing in didn't work${why ? `: ${why}` : "."}`,
+      off: "Single sign-on isn't set up.",
+    };
+    if (said[sso]) toast(said[sso]);
+    for (const k of ["sso", "who", "why"]) q.delete(k);
+    const rest = q.toString();
+    history.replaceState(null, "", `${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
+  }, [toast]);
 
   if (home.isLoading) {
     return (
@@ -98,12 +160,34 @@ function Shell() {
   const admin = view.session.admin;
   const nav = [
     { to: "/", label: "Home", icon: House, show: true },
-    { to: "/calendar", label: "Calendar", icon: CalendarDays, show: Boolean(view.profile) },
+    { to: "/calendar", label: "Calendar", icon: CalendarDays, show: view.canCalendar },
+    { to: "/files", label: "Files", icon: FolderOpen, show: view.canFiles },
+    {
+      to: "/family",
+      label: "Family",
+      icon: HeartHandshake,
+      show: Boolean(view.family),
+      badge: view.familyPending,
+    },
     { to: "/chat", label: "Chat", icon: MessageSquare, show: view.canChat },
-    { to: "/compute", label: "AI computers", icon: Cpu, show: view.canChat || admin },
+    { to: "/devices", label: "Devices", icon: MonitorSmartphone, show: admin },
     { to: "/widgets", label: "Widgets", icon: LayoutGrid, show: admin },
-    { to: "/settings", label: "Settings", icon: Settings, show: admin },
-  ].filter((n) => n.show);
+    {
+      to: "/settings",
+      label: "Settings",
+      icon: Settings,
+      show: admin,
+      note: view.update ? `Hearth ${view.update} is out` : undefined,
+    },
+  ].filter((n) => n.show) as {
+    to: string;
+    label: string;
+    icon: typeof House;
+    show: boolean;
+    badge?: number;
+    /** A dot, and what it means. */
+    note?: string;
+  }[];
 
   return (
     <>
@@ -133,8 +217,14 @@ function Shell() {
                 <Link
                   key={n.to}
                   to={n.to}
-                  aria-label={n.label}
-                  title={n.label}
+                  aria-label={
+                    n.badge
+                      ? `${n.label}, ${n.badge} waiting`
+                      : n.note
+                        ? `${n.label}: ${n.note}`
+                        : n.label
+                  }
+                  title={n.note ?? n.label}
                   className={cx(
                     "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold transition",
                     active ? "bg-accent text-white" : "text-muted hover:text-ink",
@@ -142,6 +232,22 @@ function Shell() {
                 >
                   <n.icon className="size-4" aria-hidden />
                   <span className="hidden md:inline">{n.label}</span>
+                  {n.badge ? (
+                    <span
+                      aria-hidden
+                      className={cx(
+                        "grid h-4.5 min-w-4.5 place-items-center rounded-full px-1 text-[11px] font-bold",
+                        active ? "bg-white text-accent" : "bg-accent text-white",
+                      )}
+                    >
+                      {n.badge}
+                    </span>
+                  ) : n.note ? (
+                    <span
+                      aria-hidden
+                      className={cx("size-2 rounded-full", active ? "bg-white" : "bg-accent")}
+                    />
+                  ) : null}
                 </Link>
               );
             })}
@@ -161,22 +267,24 @@ function Shell() {
             >
               <Bot className="size-4" /> Admin <LogOut className="size-3.5" />
             </button>
-          ) : (
+          ) : // Only the admin's own page offers the sign-in: adults, children and guests don't see
+          // it. A new install, with nobody set up yet, offers it to whoever is there.
+          view.profile?.role === "admin" || !view.profiles.length || view.session.needsSetup ? (
             <button
               type="button"
               title="Admin"
               aria-label="Sign in as the admin"
               onClick={() => setSignIn(true)}
-              className="grid size-9 place-items-center rounded-full text-muted hover:bg-[var(--c-surface-2)] hover:text-ink"
+              className="grid size-9 place-items-center rounded-full text-muted hover:bg-(--c-surface-2) hover:text-ink"
             >
               <LogIn className="size-4" />
             </button>
-          )}
+          ) : null}
           {view.profiles.length ? (
             <button
               type="button"
               onClick={() => setPicker(true)}
-              className="flex items-center gap-2 rounded-full border border-line bg-surface py-1 pr-3 pl-1 shadow-sm transition hover:border-[var(--c-line-strong)]"
+              className="flex items-center gap-2 rounded-full border border-line bg-surface py-1 pr-3 pl-1 shadow-sm transition hover:border-(--c-line-strong)"
               aria-label={
                 view.profile ? `${view.profile.name}. Switch person` : "Choose who's here"
               }
@@ -184,7 +292,7 @@ function Shell() {
               {view.profile ? (
                 <Avatar p={view.profile} />
               ) : (
-                <span className="grid size-8 place-items-center rounded-full bg-[var(--c-surface-2)]">
+                <span className="grid size-8 place-items-center rounded-full bg-(--c-surface-2)">
                   <UserRound className="size-4 text-muted" />
                 </span>
               )}
@@ -195,14 +303,21 @@ function Shell() {
           ) : null}
         </div>
       </header>
+      <TrustNudge />
+      <HereBanner />
+      <FamilyAlerts pending={view.familyPending} />
       <Outlet />
+      <UpdateNotice build={view.build} />
       {picker ? (
         <Picker
           profiles={view.profiles}
           current={view.profile?.id ?? null}
-          dismissable={local.get(VISITED, false) || Boolean(view.profile)}
+          owner={view.deviceOwner}
+          startWith={startWith}
+          dismissable={local.get(VISITED, false) || Boolean(view.profile) || Boolean(startWith)}
           onClose={() => {
             local.set(VISITED, true);
+            setStartWith(undefined);
             setPicker(false);
           }}
         />
@@ -213,6 +328,28 @@ function Shell() {
         onClose={() => setSignIn(false)}
       />
     </>
+  );
+}
+
+/** This tab's page is older than the one Hearth serves now: offer to load the new one. */
+function UpdateNotice({ build }: { build?: string }) {
+  const mine = useMemo(
+    () =>
+      document
+        .querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/"]')
+        ?.src.split("/")
+        .pop(),
+    [],
+  );
+  if (!build || !mine || build === mine) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => location.reload()}
+      className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[13.5px] font-semibold text-page shadow-xl"
+    >
+      Hearth was updated · Reload
+    </button>
   );
 }
 
@@ -246,8 +383,21 @@ const routes = [
     }),
     component: ChatPage,
   }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/compute", component: ComputePage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/devices", component: DevicesPage }),
+  // The AI computers page became part of Devices.
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/compute",
+    beforeLoad: () => {
+      throw redirect({ to: "/devices" });
+    },
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calendar", component: CalendarPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/files", component: FilesPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/family", component: FamilyPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/trust", component: TrustPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/welcome", component: WelcomePage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/family/$id", component: ChildPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/widgets", component: WidgetsPage }),
   createRoute({
     getParentRoute: () => rootRoute,

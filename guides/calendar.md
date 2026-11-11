@@ -52,6 +52,26 @@ Press an event to see it, **Edit** it or **Delete** it. For a repeating event in
 
 Times are set in your device's time zone, and a repeating event keeps its time of day when the clocks change.
 
+## Importing a file
+
+To copy events in from an `.ics` file (an export from Outlook, Apple Calendar or Google, or a schedule a club emailed you), use **Add a calendar → Import a file**:
+
+1. Choose the file, or drop it on the box.
+2. Choose where it goes: any calendar you can add to, or **A new calendar**, named after the file.
+3. Check the summary: how many events, how many repeat, the dates they cover, and anything that won't come over. Then **Import**.
+
+- **Repeats come over as they are,** even rules Hearth's own choices can't make, like "every other Tuesday" or "10 times". Times that were moved or cancelled in the file stay moved or cancelled.
+- **Into a Hearth calendar**, the events are yours to change. An imported rule shows as **As it was imported** in the event form, and is kept when you change every time.
+- **Into Google or CalDAV**, the events are sent there, so they show up on your phone's calendar too.
+- **Importing the same file again adds nothing new.** Events are known by the file's own ids, so an updated schedule only adds what's new.
+- **To-dos, and extra one-off dates on a repeating event** (RDATE), aren't events, so they aren't brought over; the summary says so.
+
+Unlike a [calendar link](#calendar-links), an imported file is a copy: later changes to the original don't follow it.
+
+## Downloading a calendar
+
+Any Hearth calendar can be saved as an `.ics` file for another calendar app: its settings button → **Download as .ics**. Calendars from Google or CalDAV already live in their own apps; download them there.
+
 ## Sharing
 
 - **A whole calendar:** its settings button (on the left) → **Share with**, and pick people. They see it on their calendar and can turn it off for themselves. Turn on **They can add and change events** for a family calendar everyone fills in.

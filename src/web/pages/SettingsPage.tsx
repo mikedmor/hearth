@@ -1,14 +1,36 @@
 /** Settings (admin): the house's shared things, in plain forms. */
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ExternalLink,
+  KeyRound,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import type { LinkSuggestion } from "../../shared/access";
 import type { Access } from "../../shared/api";
-import type { AiServer, Group, HearthConfig, Profile, Role } from "../../shared/config";
+import {
+  type AiServer,
+  type Group,
+  type HearthConfig,
+  isLocked,
+  type Profile,
+  type Role,
+} from "../../shared/config";
 import { BUILTIN_THEMES, THEME_KEYS, THEME_LABELS, type Theme } from "../../shared/themes";
+import type { UpdateStatus } from "../../shared/updates";
+import { ENGINE_IDS, SEARCH_ENGINES } from "../../shared/web-search";
 import { CalendarAdminPanel } from "../components/calendar/AdminPanel";
 import { RefIcon } from "../components/IconPicker";
+import { InternetPanel } from "../components/internet/InternetPanel";
+import { Markdown } from "../components/Markdown";
 import { Avatar } from "../components/Picker";
+import { SsoCard } from "../components/SsoCard";
 import { AccessBadge, type EditContext, LinkForm, SectionForm } from "../components/TileEditors";
 import {
   Button,
@@ -31,6 +53,7 @@ const TABS = [
   ["tiles", "Links"],
   ["groups", "Sections"],
   ["profiles", "People"],
+  ["internet", "Internet"],
   ["calendars", "Calendars"],
   ["ai", "AI"],
   ["secrets", "Secrets"],
@@ -89,7 +112,23 @@ export function SettingsPage() {
         {tab === "general" ? <General a={a} /> : null}
         {tab === "tiles" ? <Tiles cfg={a.config} /> : null}
         {tab === "groups" ? <Groups cfg={a.config} /> : null}
-        {tab === "profiles" ? <People a={a} /> : null}
+        {tab === "profiles" ? (
+          <div className="grid gap-5">
+            <People a={a} />
+            <WhatPeopleUse a={a} />
+            <SsoCard
+              profiles={a.config.profiles.map((p) => ({
+                id: p.id,
+                name: p.name,
+                avatar: p.avatar,
+                color: p.color,
+                role: p.role,
+                hasPin: false,
+              }))}
+            />
+          </div>
+        ) : null}
+        {tab === "internet" ? <InternetPanel /> : null}
         {tab === "calendars" ? <CalendarAdminPanel /> : null}
         {tab === "ai" ? <Ai a={a} /> : null}
         {tab === "secrets" ? <Secrets a={a} /> : null}
@@ -126,6 +165,132 @@ function Panel({
 }
 
 // ---------------------------------------------------------------------------
+
+/** Which version this is, and whether a newer release is out (from GitHub, when allowed). */
+function UpdatesPanel({ check, onCheck }: { check: boolean; onCheck: (v: boolean) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const status = useQuery({
+    queryKey: ["updates"],
+    queryFn: () => api.get<UpdateStatus>("/api/admin/updates"),
+    retry: false,
+  });
+  const [busy, setBusy] = useState(false);
+  const u = status.data;
+  const checkNow = async () => {
+    setBusy(true);
+    try {
+      const next = await api.post<UpdateStatus>("/api/admin/updates/check");
+      qc.setQueryData(["updates"], next);
+      await qc.invalidateQueries({ queryKey: keys.home });
+      if (next.error) toast(next.error, "bad");
+      else if (!next.available) toast("Hearth is up to date");
+    } catch (e) {
+      toast((e as Error).message, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel
+      title="Updates"
+      intro={
+        u ? (
+          u.devBuild ? (
+            <>
+              This is a build from source (<code>{u.current}</code>), so there's no version to
+              compare.
+            </>
+          ) : (
+            <>
+              You're running Hearth <b>{u.current}</b>.
+            </>
+          )
+        ) : (
+          "Which version this is, and whether there's a newer one."
+        )
+      }
+      action={
+        <Button onClick={() => void checkNow()} disabled={busy}>
+          <RefreshCw className={cx("size-4", busy && "animate-spin")} /> Check now
+        </Button>
+      }
+    >
+      <Toggle
+        label="Check for a new version once a day"
+        hint="Asks GitHub for Hearth's newest release: a plain request that sends nothing about your home. Saved with the settings below. Hearth never updates itself."
+        checked={check}
+        onChange={onCheck}
+      />
+      {u?.available ? (
+        <div className="mt-4 grid gap-3 rounded-xl border border-accent/40 bg-accent/5 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-semibold">
+              Hearth {u.available.version} is out
+              {u.available.publishedAt
+                ? ` (${new Date(u.available.publishedAt).toLocaleDateString()})`
+                : ""}
+              .
+            </p>
+            <a
+              href={u.available.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm font-semibold text-accent"
+            >
+              The release on GitHub <ExternalLink className="size-3.5" />
+            </a>
+          </div>
+          {u.available.notes ? (
+            <details className="text-sm">
+              <summary className="cursor-pointer font-semibold">What's new</summary>
+              <div className="mt-2 max-h-80 overflow-auto">
+                <Markdown text={u.available.notes} />
+              </div>
+            </details>
+          ) : null}
+          <div className="grid gap-1.5 text-sm">
+            <p className="font-semibold">To update</p>
+            <p className="text-muted">
+              Your settings and everything in the data folder stay as they are.
+            </p>
+            <ul className="grid gap-1.5">
+              <li>
+                <b>Docker Compose:</b> in Hearth's folder,{" "}
+                <code>docker compose pull &amp;&amp; docker compose up -d</code>
+              </li>
+              <li>
+                <b>Synology Container Manager:</b> Project → hearth → <b>Action → Build</b> (it
+                pulls the newest image).
+              </li>
+              <li>
+                <b>Built from source:</b> <code>git -C src pull</code>, then{" "}
+                <code>docker compose up -d --build</code>
+              </li>
+            </ul>
+          </div>
+        </div>
+      ) : u?.checkedAt ? (
+        <p className="mt-3 text-sm text-muted">
+          {u.error
+            ? `Couldn't check: ${u.error}`
+            : u.devBuild
+              ? `The newest release is ${u.latest}.`
+              : "Up to date."}{" "}
+          Checked {new Date(u.checkedAt).toLocaleString()}.{" "}
+          <a
+            href={u.releasesUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-accent"
+          >
+            All releases
+          </a>
+        </p>
+      ) : null}
+    </Panel>
+  );
+}
 
 function General({ a }: { a: AdminConfig }) {
   const act = useAct();
@@ -174,12 +339,16 @@ function General({ a }: { a: AdminConfig }) {
           </Field>
         </div>
       </Panel>
+      <UpdatesPanel
+        check={s.updates.check}
+        onCheck={(v) => setS({ ...s, updates: { ...s.updates, check: v } })}
+      />
       <Panel title="Network" intro="What Hearth itself may call.">
         <Toggle
           label="Let widgets reach the internet"
           hint="Off: widget sources and the designer only reach the home network (.home, .local, private addresses). Turn on for weather or public APIs."
           checked={s.network.allowInternet}
-          onChange={(v) => setS({ ...s, network: { allowInternet: v } })}
+          onChange={(v) => setS({ ...s, network: { ...s.network, allowInternet: v } })}
         />
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Field label="Check services every (s)">
@@ -217,6 +386,130 @@ function General({ a }: { a: AdminConfig }) {
                 value={s.status.slowMs}
                 onChange={(e) =>
                   setS({ ...s, status: { ...s.status, slowMs: Number(e.target.value) } })
+                }
+              />
+            )}
+          </Field>
+        </div>
+      </Panel>
+      <Panel
+        title="Search the web"
+        intro="The search box offers a web search when what someone types isn't one of the home's links. The browser goes to the search engine itself; Hearth never calls it. Each person can pick their own in Look."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Search engine">
+            {(id) => (
+              <Select
+                id={id}
+                value={s.webSearch.engine}
+                onChange={(e) =>
+                  setS({
+                    ...s,
+                    webSearch: {
+                      ...s.webSearch,
+                      engine: e.target.value as typeof s.webSearch.engine,
+                    },
+                  })
+                }
+              >
+                {ENGINE_IDS.map((e) => (
+                  <option key={e} value={e}>
+                    {SEARCH_ENGINES[e].name}
+                  </option>
+                ))}
+                <option value="custom">Your own (SearXNG, Whoogle…)</option>
+                <option value="off">Off: the home's links only</option>
+              </Select>
+            )}
+          </Field>
+          {s.webSearch.engine === "custom" ? (
+            <>
+              <Field label="Its name" hint="The box says “Search … for”.">
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={s.webSearch.name ?? ""}
+                    placeholder="SearXNG"
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        webSearch: { ...s.webSearch, name: e.target.value || undefined },
+                      })
+                    }
+                  />
+                )}
+              </Field>
+              <Field
+                label="Its address"
+                hint="With %s where the search goes, like http://search.home/search?q=%s."
+                className="sm:col-span-2"
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={s.webSearch.url ?? ""}
+                    placeholder="http://search.home/search?q=%s"
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        webSearch: { ...s.webSearch, url: e.target.value || undefined },
+                      })
+                    }
+                  />
+                )}
+              </Field>
+            </>
+          ) : null}
+        </div>
+      </Panel>
+      <Panel
+        title="Files"
+        intro="The NAS's shared folders, on the Files page. Each person connects their own NAS account, so the NAS decides what they see. Synology (DSM) for now."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="The NAS's address"
+            hint="DSM's, like https://nas.home or http://192.168.1.20:5000."
+          >
+            {(id) => (
+              <div className="flex gap-2">
+                <Input
+                  id={id}
+                  value={s.files.url ?? ""}
+                  placeholder="https://nas.home"
+                  onChange={(e) =>
+                    setS({ ...s, files: { ...s.files, url: e.target.value || undefined } })
+                  }
+                />
+                <Button
+                  disabled={!s.files.url}
+                  onClick={() =>
+                    act(async () => {
+                      const r = await api.post<{ ok: boolean; message: string }>(
+                        "/api/admin/files/check",
+                        { url: s.files.url },
+                      );
+                      if (!r.ok) throw new Error(r.message);
+                      return r;
+                    }, "That's a Synology NAS with File Station")
+                  }
+                >
+                  Check
+                </Button>
+              </div>
+            )}
+          </Field>
+          <Field
+            label="Name for mapping shares"
+            hint="What devices use (\\nas.home\photos). Empty: the address's own name."
+          >
+            {(id) => (
+              <Input
+                id={id}
+                value={s.files.smbHost ?? ""}
+                placeholder="nas.home"
+                onChange={(e) =>
+                  setS({ ...s, files: { ...s.files, smbHost: e.target.value || undefined } })
                 }
               />
             )}
@@ -320,7 +613,12 @@ function Tiles({ cfg }: { cfg: HearthConfig }) {
   const move = useOrder("tiles");
   const ctx = useEditContext(cfg);
   const people = ctx.people;
-  const [editing, setEditing] = useState<{ id: string | null } | null>(null);
+  const [editing, setEditing] = useState<{ id: string | null; from?: LinkSuggestion } | null>(null);
+  const suggestions = useQuery({
+    queryKey: ["link-suggestions"],
+    queryFn: () => api.get<{ suggestions: LinkSuggestion[] }>("/api/admin/link-suggestions"),
+    staleTime: 30_000,
+  });
   // People's own links are theirs: only the admin's own appear here.
   const tiles = cfg.tiles.filter((t) => !t.owner || t.owner === ctx.me);
   const ids = cfg.tiles.map((t) => t.id);
@@ -340,6 +638,26 @@ function Tiles({ cfg }: { cfg: HearthConfig }) {
         </Button>
       }
     >
+      {suggestions.data?.suggestions.length ? (
+        <div className="mb-3 grid gap-1.5 rounded-xl border border-dashed border-line p-3">
+          <p className="text-[13px] font-semibold">Services on your network with no link yet</p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.data.suggestions.map((s) => (
+              <button
+                key={s.url}
+                type="button"
+                onClick={() => setEditing({ id: null, from: s })}
+                title={`Add a link to ${s.url}`}
+                className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[13px] font-semibold hover:border-accent"
+              >
+                <Plus className="size-3.5 text-accent" />
+                {s.name}
+                <span className="font-normal text-muted">{new URL(s.url).host}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <ul className="divide-y divide-line">
         {tiles.map((t) => {
           const i = ids.indexOf(t.id);
@@ -371,7 +689,9 @@ function Tiles({ cfg }: { cfg: HearthConfig }) {
           );
         })}
       </ul>
-      {editing ? <LinkForm id={editing.id} ctx={ctx} onClose={() => setEditing(null)} /> : null}
+      {editing ? (
+        <LinkForm id={editing.id} from={editing.from} ctx={ctx} onClose={() => setEditing(null)} />
+      ) : null}
     </Panel>
   );
 }
@@ -430,6 +750,110 @@ function Groups({ cfg }: { cfg: HearthConfig }) {
 
 // ---------------------------------------------------------------------------
 
+/** Which roles may use Files, the calendar and chat: one grid, the admin always may. */
+function WhatPeopleUse({ a }: { a: AdminConfig }) {
+  const act = useAct();
+  const settings = a.config.settings;
+  const [files, setFiles] = useState(settings.features.files);
+  const [calendar, setCalendar] = useState(settings.features.calendar);
+  const [chat, setChat] = useState(settings.ai.chatRoles);
+  useEffect(() => {
+    setFiles(settings.features.files);
+    setCalendar(settings.features.calendar);
+    setChat(settings.ai.chatRoles);
+  }, [settings]);
+  const rows: { label: string; hint: string; roles: Role[]; set: (r: Role[]) => void }[] = [
+    {
+      label: "Files",
+      hint: "The NAS's shared folders. Each person also needs a PIN and their own NAS account.",
+      roles: files,
+      set: setFiles,
+    },
+    {
+      label: "Calendar",
+      hint: "Their own calendar and the Coming up widget.",
+      roles: calendar,
+      set: setCalendar,
+    },
+    {
+      label: "Chat",
+      hint: settings.ai.servers.length
+        ? "Asking the home's AI."
+        : "Needs an AI server first (AI tab).",
+      roles: chat,
+      set: setChat,
+    },
+  ];
+  const changed =
+    JSON.stringify([files, calendar, chat]) !==
+    JSON.stringify([settings.features.files, settings.features.calendar, settings.ai.chatRoles]);
+  return (
+    <Panel
+      title="What people can use"
+      intro="By role. The admin, signed in, can always use everything."
+      action={
+        <Button
+          variant="primary"
+          disabled={!changed}
+          onClick={() =>
+            act(
+              () =>
+                api.put("/api/admin/settings", {
+                  ...settings,
+                  features: { ...settings.features, files, calendar },
+                  ai: { ...settings.ai, chatRoles: chat },
+                }),
+              "Saved",
+            )
+          }
+        >
+          Save
+        </Button>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full text-[14px]">
+          <thead>
+            <tr className="text-left text-[12px] text-muted">
+              <th className="py-2 font-semibold">Feature</th>
+              {(["admin", "adult", "child"] as Role[]).map((r) => (
+                <th key={r} className="w-24 py-2 text-center font-semibold">
+                  {{ admin: "Admin", adult: "Adults", child: "Children" }[r]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {rows.map((row) => (
+              <tr key={row.label}>
+                <td className="py-2.5 pr-3">
+                  <div className="font-semibold">{row.label}</div>
+                  <div className="text-[12.5px] text-muted">{row.hint}</div>
+                </td>
+                {(["admin", "adult", "child"] as Role[]).map((r) => (
+                  <td key={r} className="py-2.5 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label={`${row.label} for ${{ admin: "the admin's profile", adult: "adults", child: "children" }[r]}`}
+                      className="size-4 accent-(--c-accent)"
+                      checked={row.roles.includes(r)}
+                      onChange={(e) =>
+                        row.set(
+                          e.target.checked ? [...row.roles, r] : row.roles.filter((x) => x !== r),
+                        )
+                      }
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
 function People({ a }: { a: AdminConfig }) {
   const act = useAct();
   const [editing, setEditing] = useState<{ old: string; p: Profile } | null>(null);
@@ -466,7 +890,7 @@ function People({ a }: { a: AdminConfig }) {
               <p className="text-[12.5px] text-muted">
                 {{ admin: "Admin", adult: "Adult", child: "Child" }[p.role]}
                 {a.pins[p.id] ? " · PIN" : ""}
-                {p.locked ? " · locked" : ""}
+                {isLocked(p) ? " · locked" : ""}
               </p>
             </div>
             <Button
@@ -570,8 +994,13 @@ function People({ a }: { a: AdminConfig }) {
             <div className="sm:col-span-2">
               <Toggle
                 label="Locked"
-                hint="Only the admin can change this page's layout and look."
-                checked={editing.p.locked}
+                hint={
+                  editing.p.role === "child"
+                    ? "A child's page is always locked: you set up their links, widgets and look."
+                    : "Only the admin can change this page's links, layout and look."
+                }
+                checked={isLocked(editing.p)}
+                disabled={editing.p.role === "child"}
                 onChange={(v) => setEditing({ ...editing, p: { ...editing.p, locked: v } })}
               />
             </div>
@@ -1162,7 +1591,7 @@ function Advanced({ cfg }: { cfg: HearthConfig }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         spellCheck={false}
-        className="min-h-[480px]"
+        className="min-h-120"
         aria-label="hearth.json"
       />
       <div className="mt-3 grid gap-3">

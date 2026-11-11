@@ -24,9 +24,9 @@ Add as many as you like and choose which one chat starts on. **Who can chat** pi
 - **A busy server:** if a shared server says it's busy, downloading a model, or out of machines, Hearth waits and tells you why, for up to 45 seconds; longer waits are reported with how long.
 - **Ask** is a widget with a box that opens the chat with your question.
 
-## AI computers
+## Your AI servers at a glance
 
-**AI computers** shows each server at a glance: up or down, how busy, how many models it has, which are loaded, and how fast it answered. The **AI computers** widget puts the same on the start page.
+The **AI servers** widget shows each server: up or down, how busy, how many models it has, which are loaded, and how fast it answered. On the [Devices](devices.md#ai-computers) page (the admin's), each server is a service on the device it runs on, and a server that shares several computers shows each of them on its own device, with what it's doing and its hardware.
 
 ## The widget designer
 
@@ -34,8 +34,8 @@ With a server added, the widget editor's **AI designer** drafts a widget from a 
 
 ## What's sent
 
-Only to the servers you add, and only when someone chats, opens AI computers, or uses the designer:
+Only to the servers you add, and only when someone chats, the servers are checked, or someone uses the designer:
 
 - **Chat:** the conversation, the system prompt, and for children a note that they're a child.
-- **AI computers:** questions about the server's models and load. No conversation.
+- **Checks:** questions about the server's models and load, and (for a server that shares computers) its list of computers. No conversation.
 - **The designer:** your description, the widget's draft, and samples of what its sources returned, with secrets hidden.

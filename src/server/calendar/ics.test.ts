@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { eventIcs, occurrences, offsetAt, vtimezone, wallToUtc } from "./ics";
+import {
+  calendarIcs,
+  eventIcs,
+  occurrences,
+  offsetAt,
+  readImport,
+  vtimezone,
+  wallToUtc,
+} from "./ics";
 
 const cal = (...events: string[]) =>
   ["BEGIN:VCALENDAR", "VERSION:2.0", ...events, "END:VCALENDAR"].join("\r\n");
@@ -194,5 +202,132 @@ describe("writing events", () => {
     expect(ics).toContain("DTSTART;VALUE=DATE:20261111");
     expect(ics).toContain("SEQUENCE:3");
     expect(ics).toContain("BEGIN:VALARM");
+  });
+});
+
+describe("importing a file", () => {
+  const file = cal(
+    // Every Tuesday and Thursday at 18:00 in New York, six times; one skipped, one moved, one cancelled.
+    ev(
+      "UID:club",
+      "DTSTART;TZID=America/New_York:20261103T180000",
+      "DTEND;TZID=America/New_York:20261103T190000",
+      "RRULE:FREQ=WEEKLY;BYDAY=TU,TH;COUNT=6",
+      "EXDATE;TZID=America/New_York:20261105T180000",
+      "SUMMARY:Chess club",
+    ),
+    ev(
+      "UID:club",
+      "RECURRENCE-ID;TZID=America/New_York:20261110T180000",
+      "DTSTART;TZID=America/New_York:20261110T200000",
+      "DTEND;TZID=America/New_York:20261110T210000",
+      "SUMMARY:Chess club (late)",
+    ),
+    ev("UID:club", "RECURRENCE-ID;TZID=America/New_York:20261112T180000", "STATUS:CANCELLED"),
+    ev("UID:bday", "DTSTART;VALUE=DATE:20260314", "RRULE:FREQ=YEARLY", "SUMMARY:Sam's birthday"),
+    ev("UID:here", "DTSTART:20261120T093000", "DTEND:20261120T103000", "SUMMARY:No zone"),
+    ["BEGIN:VTODO", "UID:t1", "SUMMARY:Buy milk", "END:VTODO"].join("\r\n"),
+  );
+
+  it("keeps repeat rules, skipped, moved and cancelled times, and zones", () => {
+    const got = readImport(file, "Europe/London");
+    const club = got.events.find((e) => e.uid === "club");
+    expect(club).toMatchObject({
+      start: "2026-11-03T23:00:00.000Z",
+      timeZone: "America/New_York",
+      rrule: "FREQ=WEEKLY;COUNT=6;BYDAY=TU,TH",
+    });
+    expect(club?.except.sort()).toEqual([
+      "2026-11-05T23:00:00.000Z",
+      "2026-11-10T23:00:00.000Z",
+      "2026-11-12T23:00:00.000Z",
+    ]);
+    expect(got.events.find((e) => e.uid.startsWith("club#"))).toMatchObject({
+      uid: "club#2026-11-10T23:00:00.000Z",
+      title: "Chess club (late)",
+      start: "2026-11-11T01:00:00.000Z",
+    });
+    // A plain yearly repeat becomes Hearth's own "every year".
+    const bday = got.events.find((e) => e.uid === "bday");
+    expect(bday).toMatchObject({ allDay: true, repeat: "yearly" });
+    expect(bday?.rrule).toBeUndefined();
+    // No zone: read in the importing person's.
+    expect(got.events.find((e) => e.uid === "here")?.start).toBe("2026-11-20T09:30:00.000Z");
+    expect(got).toMatchObject({ repeating: 2, changedTimes: 2, first: "2026-03-14", last: "…" });
+    expect(got.notes.join(" ")).toMatch(/1 to-do isn't an event/);
+    expect(got.objects.map((o) => o.uid)).toEqual(["club", "bday", "here"]);
+    expect(got.objects[0]?.ics).toContain("RECURRENCE-ID");
+  });
+
+  it("refuses what isn't a calendar", () => {
+    expect(() => readImport("hello", "UTC")).toThrow(/isn't a calendar/);
+  });
+});
+
+describe("downloading a calendar", () => {
+  it("writes events that any calendar app reads back the same", () => {
+    const ics = calendarIcs("Family", [
+      {
+        id: "a",
+        title: "Swim",
+        start: "2026-11-02T14:00:00.000Z",
+        end: "2026-11-02T15:00:00.000Z",
+        allDay: false,
+        timeZone: "America/New_York",
+        repeat: "weekly",
+        until: "2026-11-16",
+        except: ["2026-11-09T14:00:00.000Z"],
+        updated: "2026-11-01T00:00:00.000Z",
+      },
+      {
+        id: "b",
+        uid: "club",
+        title: "Club",
+        start: "2026-11-03T23:00:00.000Z",
+        end: "2026-11-04T00:00:00.000Z",
+        allDay: false,
+        timeZone: "America/New_York",
+        rrule: "FREQ=WEEKLY;UNTIL=20261117T235959;BYDAY=TU",
+        except: [],
+        updated: "2026-11-01T00:00:00.000Z",
+      },
+    ]);
+    expect(ics).toContain("X-WR-CALNAME:Family");
+    expect(ics).toContain("UID:a@hearth");
+    expect(ics).toContain("UID:club");
+    // UNTIL goes back to UTC, as the standard wants with a zone.
+    expect(ics).toMatch(/RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261118T045959Z/);
+    expect(ics).toMatch(/RRULE:FREQ=WEEKLY;UNTIL=20261117T045959Z/);
+    const back = occurrences(
+      ics,
+      Date.parse("2026-11-01T00:00:00Z"),
+      Date.parse("2026-12-01T00:00:00Z"),
+    );
+    expect(back.map((o) => [o.title, o.start])).toEqual([
+      ["Swim", "2026-11-02T14:00:00.000Z"],
+      ["Swim", "2026-11-16T14:00:00.000Z"],
+      ["Club", "2026-11-03T23:00:00.000Z"],
+      ["Club", "2026-11-10T23:00:00.000Z"],
+      ["Club", "2026-11-17T23:00:00.000Z"],
+    ]);
+  });
+});
+
+describe("an import's range", () => {
+  it("runs to a series' last time, and an all-day event's last day", () => {
+    const got = readImport(
+      cal(
+        ev(
+          "UID:c",
+          "DTSTART;TZID=America/New_York:20261103T180000",
+          "DTEND;TZID=America/New_York:20261103T190000",
+          "RRULE:FREQ=WEEKLY;BYDAY=TU,TH;COUNT=8",
+          "SUMMARY:Club",
+        ),
+        ev("UID:f", "DTSTART;VALUE=DATE:20261121", "DTEND;VALUE=DATE:20261123", "SUMMARY:Fair"),
+      ),
+      "UTC",
+    );
+    expect([got.first, got.last]).toEqual(["2026-11-03", "2026-11-26"]);
   });
 });

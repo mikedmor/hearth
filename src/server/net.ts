@@ -2,9 +2,42 @@
  * Every request Hearth makes for a widget goes through here:
  * - only to the home network, unless the admin allowed the internet (Settings → Network);
  * - redirects are followed by hand, and each hop is checked again;
- * - answers are capped in size and time.
+ * - answers are capped in size and time;
+ * - a `.local` name is looked up on the home network (see mdns.ts): the container can't.
  */
 import { isLocalUrl } from "../shared/config";
+
+/** A name only multicast DNS knows (motioneye.local). */
+export function isLocalName(host: string): boolean {
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.local\.?$/i.test(host);
+}
+
+let localResolver: ((host: string) => Promise<string | null>) | undefined;
+
+/** How `.local` names are found (set once at start; tests leave it unset). */
+export function setLocalResolver(fn: ((host: string) => Promise<string | null>) | undefined) {
+  localResolver = fn;
+}
+
+/**
+ * The address to connect to: a plain-http `.local` name is pointed at the device's address on
+ * the home network. HTTPS keeps the name (the certificate is for the name, not the address).
+ */
+export async function reachable(address: string): Promise<string> {
+  if (!localResolver) return address;
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return address;
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "ws:") || !isLocalName(url.hostname))
+    return address;
+  const ip = await localResolver(url.hostname).catch(() => null);
+  if (!ip) return address;
+  url.hostname = ip;
+  return url.href;
+}
 
 export class NetError extends Error {}
 
@@ -49,6 +82,8 @@ export interface FetchOptions {
   maxBytes?: number;
   policy: NetPolicy;
   fetch?: typeof fetch;
+  /** A live video stream (MJPEG, as webcams send) answers with its first picture. */
+  firstFrame?: boolean;
 }
 
 export interface FetchResult {
@@ -82,7 +117,7 @@ export async function guardedFetch(address: string, opts: FetchOptions): Promise
       for (const k of Object.keys(headers))
         if (k.toLowerCase() === "authorization") delete headers[k];
     try {
-      res = await doFetch(url, {
+      res = await doFetch(await reachable(url.href), {
         method: again ? "GET" : method,
         headers,
         body: again || method === "GET" ? undefined : opts.body,
@@ -106,10 +141,13 @@ export async function guardedFetch(address: string, opts: FetchOptions): Promise
       url = checkTarget(new URL(res.headers.get("location") as string, url).href, opts.policy);
       continue;
     }
-    const body = await readLimited(res, opts.maxBytes ?? 2 * 1024 * 1024);
+    const type = res.headers.get("content-type") ?? "";
+    const stream = opts.firstFrame && /^multipart\/x-mixed-replace/i.test(type);
+    const max = opts.maxBytes ?? 2 * 1024 * 1024;
+    const body = stream ? await readFirstJpeg(res, max) : await readLimited(res, max);
     return {
       status: res.status,
-      contentType: res.headers.get("content-type") ?? "",
+      contentType: stream ? "image/jpeg" : type,
       body,
       ms: Date.now() - started,
       headers: res.headers,
@@ -134,6 +172,32 @@ async function readLimited(res: Response, max: number): Promise<Buffer> {
     chunks.push(value);
   }
   return Buffer.concat(chunks);
+}
+
+/** The first whole JPEG in a stream of them (a webcam's MJPEG), then stop reading. */
+export async function readFirstJpeg(res: Response, max: number): Promise<Buffer> {
+  if (!res.body) throw new NetError("The stream sent nothing.");
+  const reader = res.body.getReader();
+  let buf = Buffer.alloc(0);
+  let start = -1;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf = Buffer.concat([buf, value]);
+    if (start < 0) start = buf.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
+    if (start >= 0) {
+      const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 3);
+      if (end >= 0) {
+        await reader.cancel().catch(() => {});
+        return buf.subarray(start, end + 2);
+      }
+    }
+    if (buf.length > max) {
+      await reader.cancel().catch(() => {});
+      throw new NetError(`No picture in the first ${Math.round(max / 1024)} KB of the stream.`);
+    }
+  }
+  throw new NetError("The stream ended before a whole picture.");
 }
 
 /** Parse an answer as JSON; text that isn't JSON comes back as a string. */

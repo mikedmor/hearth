@@ -45,7 +45,20 @@ Hearth calls only the home network by default. Each connection below happens onl
 | Finding services              | Private addresses you scan, and addresses you type when adding a link                        |
 | A site's own icon             | That site, when you ask for its icon                                                          |
 | AI                            | The AI servers the admin adds                                                                 |
+| Devices                       | AdGuard Home on your router, once the admin connects it; and each device on the network, by its private address: to ask what it is (Google Cast, Bonjour, Roku, Sonos, Hue, Shelly, WLED, Tasmota, its web page), to knock on a few usual ports to see whether it's on, and to check its ports for apps (a computer, server or console once a day by itself, any device when the admin asks). Read only |
+| Network map                   | The router the admin connects (a GL.iNet router), on the home network only: it signs in with a challenge (a hash of the admin password, never the password itself) and reads who's connected to what, every minute. It changes nothing; the password is stored encrypted |
+| Smart home                    | The openHAB or Home Assistant the admin connects, on the home network only: its devices, items and states every minute, with a token kept encrypted. A switch only when the admin presses it |
+| AI computers                  | The AI servers the admin adds: their list of computers, for a server that shares several (with the same key as chat) |
+| Pinball tables                | VPin Studio on a table on your network (port 8089, which has no password): its status, scores and players every minute. Its controls (start a table, mute, restart, shut down) only when the admin presses them |
+| Internet controls             | AdGuard Home on your router: its query log (read every 20 seconds), its custom filtering rules (only Hearth's own marked lines) and one client per child named "Hearth: …" (safe search, blocked services), once the admin turns the controls on |
+| Trust page                    | Nothing: it offers the certificate authority's public root, read from a read-only file. Hearth refuses a file with a private key in it |
+| Guest pass                    | AdGuard Home on your router (its own marked rules, once the admin turns guest passes on). The welcome page and the house password are on Hearth; the password is stored encrypted, compared in constant time, and wrong tries slow that device down |
+| Single sign-on                | The identity provider the admin sets up (usually on your network, like `https://id.home`): its discovery document, keys and token endpoint. Hearth verifies every ID token's signature, issuer, audience, expiry and nonce itself |
+| Alerts                        | The web address the admin gives for alerts (an ntfy topic, Home Assistant…), which may be on the internet. Only the alert is sent: who asked and for what, or which watched device or service stopped or came back |
 | Calendars                     | The CalDAV servers, calendar links and Google accounts people add; the internet only if the admin allows it for calendars |
+| Files                         | The NAS the admin points Files at (Synology DSM), as each person, with their own NAS sign-in kept encrypted |
+| Update check                  | `api.github.com`, once a day, only if the admin turns it on (or presses **Check now**): a plain request for Hearth's newest release that sends nothing about your home. Hearth never installs anything |
+| Web search                    | Nothing: the browser goes to the search engine itself, so a search never passes through Hearth |
 
 Every request Hearth makes is checked against those rules, again at every redirect, and limited in size and time. A password or token is never forwarded to a different site by a redirect.
 

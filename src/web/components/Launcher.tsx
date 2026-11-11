@@ -84,7 +84,7 @@ export function Dock({
           {...linkProps(t)}
           className={cx(
             "dock-item group relative flex flex-col items-center gap-1.5 rounded-2xl px-1 py-2 text-center transition hover:bg-(--c-surface-2)",
-            fit ? "min-w-0 flex-1" : "w-[84px] flex-none",
+            fit ? "min-w-0 flex-1" : "w-21 flex-none",
           )}
         >
           <span className="relative block">

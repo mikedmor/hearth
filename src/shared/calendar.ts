@@ -75,6 +75,13 @@ export const HearthEventSchema = z.object({
     .optional(),
   /** Starts of the times it was skipped ("Delete just this one"). */
   except: z.array(when).max(500).default([]),
+  /**
+   * A repeat rule from an imported file that Hearth's simple choices can't say ("every other
+   * Tuesday", "10 times"): an iCalendar RRULE, used instead of `repeat` and `until`.
+   */
+  rrule: z.string().max(500).optional(),
+  /** The event's id in the file it was imported from, so importing it again adds nothing. */
+  uid: z.string().max(300).optional(),
   createdBy: slug,
   updated: z.string().max(40),
 });
@@ -162,6 +169,8 @@ export interface CalEvent {
   notes?: string;
   repeat?: Repeat;
   repeating: boolean;
+  /** It repeats by a rule from an imported file, which the event form keeps as it is. */
+  customRepeat?: boolean;
   /** People tagged on it. */
   people: string[];
   canEdit: boolean;
@@ -196,6 +205,24 @@ export interface CalendarView {
 }
 
 /** A calendar found in an account, to add. */
+/** What importing a file would do, or did. */
+export interface ImportSummary {
+  /** Events in the file (a repeating event counts once). */
+  events: number;
+  repeating: number;
+  /** Times of a repeating event that were moved or cancelled in the file. */
+  changedTimes: number;
+  /** Already in that calendar from an earlier import: left alone. */
+  duplicates: number;
+  /** Added (0 when only looking). */
+  added: number;
+  /** The first and last day of anything in it ("…" for a series with no end). */
+  first?: string;
+  last?: string;
+  /** Things in the file Hearth can't bring over, in plain words. */
+  notes: string[];
+}
+
 export interface RemoteCalendar {
   remote: string;
   name: string;
@@ -221,6 +248,8 @@ export const EventInputSchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .optional(),
     people: z.array(slug).max(50).default([]),
+    /** Changing every time of an imported event: keep its own repeat rule. */
+    keepRule: z.boolean().optional(),
   })
   .refine((e) => e.allDay === !e.start.includes("T") && e.allDay === !e.end.includes("T"), {
     message: "An all-day event has dates only; others have times",

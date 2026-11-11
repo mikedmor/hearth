@@ -5,6 +5,8 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly issues: string[] = [],
+    /** The whole answer, for anything else it said (like that a sign-in code is needed). */
+    readonly data: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -31,7 +33,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!res.ok) {
     const d = (data ?? {}) as { error?: string; issues?: string[] };
-    throw new ApiError(d.error ?? `Hearth answered ${res.status}.`, res.status, d.issues ?? []);
+    throw new ApiError(
+      d.error ?? `Hearth answered ${res.status}.`,
+      res.status,
+      d.issues ?? [],
+      typeof data === "object" && data ? (data as Record<string, unknown>) : {},
+    );
   }
   return data as T;
 }

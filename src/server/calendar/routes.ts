@@ -36,9 +36,12 @@ const where = z.object({
 
 export function calendarRoutes(app: Hono, d: CalendarRouteDeps): void {
   const me = (c: Context): Profile => {
-    const p = d.who(c).profile;
+    const w = d.who(c);
+    const p = w.profile;
     if (!p)
       throw new CalendarError("Pick who you are first: calendars are each person's own.", 403);
+    if (!w.admin && !d.config.get().settings.features.calendar.includes(p.role))
+      throw new CalendarError("The calendar isn't turned on for you.", 403);
     return p;
   };
   const done = (c: Context, extra: Record<string, unknown> = {}) => {
@@ -123,6 +126,41 @@ export function calendarRoutes(app: Hono, d: CalendarRouteDeps): void {
   app.delete("/api/calendar/calendars/:id", async (c) => {
     await d.service.deleteCalendar(me(c), c.req.param("id"));
     return done(c);
+  });
+
+  /** Import a calendar file into one of your calendars (or a new one). `dryRun` only looks. */
+  app.post("/api/calendar/import", async (c) => {
+    const b = await d.body(
+      c,
+      z
+        .object({
+          calendar: id.optional(),
+          newCalendar: z
+            .object({ name: z.string().trim().min(1, "Give it a name").max(60), color })
+            .optional(),
+          ics: z
+            .string()
+            .min(1)
+            .max(6 * 1024 * 1024, "Files can be up to 6 MB"),
+          timeZone: z.string().max(60).default("UTC"),
+          dryRun: z.boolean().default(false),
+        })
+        .refine((x) => x.calendar || x.newCalendar, "Choose which calendar to import into"),
+    );
+    const r = await d.service.importIcs(me(c), b);
+    if (b.dryRun) return c.json(r);
+    return done(c, { ...r });
+  });
+
+  /** A Hearth calendar as an .ics file. */
+  app.get("/api/calendar/calendars/:id/export.ics", (c) => {
+    const { name, ics } = d.service.exportIcs(me(c), c.req.param("id"));
+    const file = `${name.replace(/[^\p{L}\p{N} _-]+/gu, "").trim() || "calendar"}.ics`;
+    return c.body(ics, 200, {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": `attachment; filename="${file.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(file)}`,
+      "cache-control": "no-store",
+    });
   });
 
   /** What this person turned off: calendars, and "from:<person>" groups. */

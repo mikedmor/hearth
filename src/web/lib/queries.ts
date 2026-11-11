@@ -43,7 +43,9 @@ export function useLiveRefresh(): void {
   const qc = useQueryClient();
   useEffect(
     () =>
-      live.changes(() => {
+      live.changes((what) => {
+        // The devices change every minute or so; only the Devices page cares, and it listens.
+        if (what === "devices") return;
         void qc.invalidateQueries({ queryKey: keys.home });
         void qc.invalidateQueries({ queryKey: keys.admin });
       }),

@@ -2,8 +2,17 @@
  * Works out a custom widget's blocks from its sources' latest data. Runs on the server; the page
  * only gets the result. A failing block shows its own error and never breaks the others.
  */
+
+import type { CardCell, ChartOptions, FieldType, ResultColumn } from "./cardkit/result";
 import { display, type ExprContext, fillTemplate, run, toNumber, truthy } from "./expr";
-import { type Block, type ResolvedBlock, TONES, type Tone, type WidgetDoc } from "./widget-doc";
+import {
+  type Block,
+  type CHART_KINDS,
+  type ResolvedBlock,
+  TONES,
+  type Tone,
+  type WidgetDoc,
+} from "./widget-doc";
 
 export interface EvalInput {
   /** The latest value of each source, by id. */
@@ -227,6 +236,15 @@ function resolveBlock(b: Block, ctx: ExprContext): ResolvedBlock {
         tone: toneOf(b.tone, ctx),
         items: b.items.map((p) => ({ label: p.label, value: fillTemplate(p.value, ctx) })),
       };
+    case "columns":
+    case "area":
+    case "pie":
+    case "treemap":
+    case "heatmap":
+    case "scatter":
+    case "waterfall":
+    case "calendar":
+      return { ...common, ...chart(b, ctx) } as ResolvedBlock;
     case "image": {
       const src = fillTemplate(b.src, ctx).trim();
       return {
@@ -241,6 +259,93 @@ function resolveBlock(b: Block, ctx: ExprContext): ResolvedBlock {
       };
     }
   }
+}
+
+/** "2026-11-11", or one starting so: a date. "2026-11": a month. */
+const DATE = /^\d{4}-\d{2}-\d{2}/;
+const MONTH = /^\d{4}-\d{2}$/;
+
+/** What a column's values are, from the values themselves. */
+function typeOfCells(cells: CardCell[]): FieldType {
+  const present = cells.filter((c) => c !== null && c !== "");
+  if (!present.length) return "text";
+  if (present.every((c) => typeof c === "number")) return "number";
+  if (present.every((c) => typeof c === "string" && MONTH.test(c))) return "month";
+  if (present.every((c) => typeof c === "string" && DATE.test(c))) return "date";
+  return "text";
+}
+
+const cell = (v: unknown): CardCell =>
+  v === null || v === undefined
+    ? null
+    : typeof v === "number" || typeof v === "boolean"
+      ? v
+      : typeof v === "string"
+        ? v
+        : String(v);
+
+type ChartBlock = Extract<Block, { kind: (typeof CHART_KINDS)[number] }>;
+
+/** A chart block's items as columns and rows (Muny's card kit draws those). */
+function chart(b: ChartBlock, ctx: ExprContext) {
+  const list = items(b.items, ctx, b.limit);
+  const series = b.series ?? [];
+  const xs: CardCell[] = [];
+  const ys: CardCell[] = [];
+  const names: CardCell[] = [];
+  const values: (number | null)[][] = series.map(() => []);
+  list.forEach((item, i) => {
+    const c = each(ctx, item, i);
+    xs.push(cell(run(b.x, c)));
+    if (b.kind === "heatmap") ys.push(cell(run(b.y, c)));
+    if (b.kind === "calendar" && b.name) names.push(cell(run(b.name, c)));
+    series.forEach((s, n) => {
+      (values[n] as (number | null)[]).push(toNumber(run(s.value, c)));
+    });
+  });
+  // Dates are kept as their day, so a calendar and a time axis group them.
+  const xType = typeOfCells(xs);
+  const dims: ResultColumn[] = [
+    {
+      id: "x",
+      label: b.xLabel ?? (xType === "date" ? "Day" : "Item"),
+      type: xType,
+      role: "dimension",
+    },
+  ];
+  if (b.kind === "heatmap")
+    dims.push({ id: "y", label: b.yLabel ?? "", type: typeOfCells(ys), role: "dimension" });
+  if (b.kind === "calendar" && b.name)
+    dims.push({ id: "name", label: "Name", type: "text", role: "dimension" });
+  const defaultMark = b.kind === "area" ? "area" : "column";
+  const measures: ResultColumn[] = series.map((s, n) => ({
+    id: `s${n}`,
+    label: s.label,
+    type: s.format ?? "number",
+    role: "measure",
+    color: s.color,
+    mark: s.mark && s.mark !== "auto" ? s.mark : defaultMark,
+  }));
+  const rows: CardCell[][] = xs.map((x, i) => [
+    xType === "date" && typeof x === "string" ? x.slice(0, 10) : x,
+    ...(b.kind === "heatmap" ? [ys[i] ?? null] : []),
+    ...(b.kind === "calendar" && b.name ? [names[i] ?? null] : []),
+    ...values.map((v) => v[i] ?? null),
+  ]);
+  const options: ChartOptions = {
+    height: b.height,
+    legend: b.legend,
+    ...(b.kind === "columns" || b.kind === "area" ? { stacked: b.stacked } : {}),
+    ...(b.kind === "pie"
+      ? { donut: b.donut, center: b.center ? fillTemplate(b.center, ctx) : undefined }
+      : {}),
+  };
+  return {
+    kind: b.kind,
+    tone: "normal" as Tone,
+    query: { columns: [...dims, ...measures], rows, truncated: list.length >= b.limit },
+    options,
+  };
 }
 
 function lightState(v: unknown): "up" | "down" | "warn" | "off" {

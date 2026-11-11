@@ -14,25 +14,38 @@ import {
   ClipboardCopy,
   LayoutTemplate,
   Loader2,
+  PencilRuler,
+  Redo2,
   RefreshCw,
   Square,
   TriangleAlert,
+  Undo2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DesignEvent, PreviewResult } from "../../shared/api";
 import type { Audience, Widget } from "../../shared/config";
 import type { WidgetDocInput } from "../../shared/widget-doc";
 import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
-import { Button, ErrorNote, Field, Input, Select, TextArea, useToast } from "../components/ui";
+import {
+  Button,
+  ErrorNote,
+  Field,
+  IconButton,
+  Input,
+  Select,
+  TextArea,
+  useToast,
+} from "../components/ui";
 import { Blocks } from "../components/widgets/Blocks";
+import { Builder } from "../components/widgets/editor/Builder";
 import { api, streamEvents } from "../lib/api";
 import { cx, slugify } from "../lib/format";
 import { useAdminConfig, useHome, useServers } from "../lib/queries";
 
 const TEMPLATES: { name: string; hint: string; doc: WidgetDocInput }[] = [
   {
-    name: "Services as lights",
+    name: "Service Health",
     hint: "From Hearth's own checks. Works right away.",
     doc: {
       v: 1,
@@ -161,10 +174,50 @@ export function WidgetEditorPage() {
     audience: "everyone" as Audience,
   });
   const [text, setText] = useState(JSON.stringify(EMPTY, null, 2));
-  const [tab, setTab] = useState<"designer" | "json" | "templates">("designer");
+  const [tab, setTab] = useState<"build" | "designer" | "json" | "templates">("build");
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
+
+  // Undo and redo over every change, from any tab. Quick changes in a row (typing) count as one.
+  const hist = useRef({ list: [text], at: 0, last: 0 });
+  const change = useCallback((next: string) => {
+    const h = hist.current;
+    if (h.list[h.at] === next) return;
+    const now = Date.now();
+    if (now - h.last < 1000 && h.at > 0 && h.at === h.list.length - 1) h.list[h.at] = next;
+    else {
+      h.list = [...h.list.slice(0, h.at + 1), next].slice(-100);
+      h.at = h.list.length - 1;
+    }
+    h.last = now;
+    setText(next);
+  }, []);
+  const step = useCallback((by: number) => {
+    const h = hist.current;
+    const at = h.at + by;
+    if (at < 0 || at >= h.list.length) return;
+    h.at = at;
+    h.last = 0;
+    setText(h.list[at] as string);
+  }, []);
+  const canUndo = hist.current.at > 0;
+  const canRedo = hist.current.at < hist.current.list.length - 1;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      // Text boxes keep their own undo.
+      const el = e.target as HTMLElement;
+      if (el.closest("input, textarea, select, [contenteditable]")) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) step(-1);
+      else if (k === "y" || (k === "z" && e.shiftKey)) step(1);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step]);
 
   useEffect(() => {
     if (loaded || !admin.data) return;
@@ -175,7 +228,9 @@ export function WidgetEditorPage() {
         description: existing.description ?? "",
         audience: existing.audience,
       });
-      setText(JSON.stringify(existing.doc, null, 2));
+      const t = JSON.stringify(existing.doc, null, 2);
+      hist.current = { list: [t], at: 0, last: 0 };
+      setText(t);
     }
     setLoaded(true);
   }, [admin.data, existing, loaded]);
@@ -255,7 +310,7 @@ export function WidgetEditorPage() {
     }
   };
 
-  const setDoc = (doc: unknown) => setText(JSON.stringify(doc, null, 2));
+  const setDoc = (doc: unknown) => change(JSON.stringify(doc, null, 2));
 
   return (
     <main className="shell pt-4 pb-16">
@@ -267,6 +322,14 @@ export function WidgetEditorPage() {
           <ArrowLeft className="size-4" /> Widgets
         </Link>
         <div className="flex gap-2">
+          <div className="flex">
+            <IconButton label="Undo (Ctrl+Z)" disabled={!canUndo} onClick={() => step(-1)}>
+              <Undo2 className="size-4" />
+            </IconButton>
+            <IconButton label="Redo (Ctrl+Y)" disabled={!canRedo} onClick={() => step(1)}>
+              <Redo2 className="size-4" />
+            </IconButton>
+          </div>
           <CopyPrompt />
           <Button
             variant="primary"
@@ -328,142 +391,163 @@ export function WidgetEditorPage() {
       </div>
       <ErrorNote error={saveError} />
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <section className="card flex min-h-[560px] flex-col overflow-hidden">
-          <div className="flex gap-1 border-b border-line p-2" role="tablist">
-            {(
-              [
-                ["designer", "AI designer", Bot],
-                ["templates", "Templates", LayoutTemplate],
-                ["json", "JSON", Braces],
-              ] as const
-            ).map(([key, label, Icon]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={tab === key}
-                onClick={() => setTab(key)}
-                className={cx(
-                  "flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[13px] font-semibold",
-                  tab === key ? "bg-accent text-white" : "text-muted hover:text-ink",
-                )}
-              >
-                <Icon className="size-4" /> {label}
-              </button>
-            ))}
-          </div>
-          {tab === "designer" ? <Designer draft={parsed.doc} onDraft={setDoc} /> : null}
-          {tab === "templates" ? (
-            <ul className="grid gap-2 p-4">
-              {TEMPLATES.map((t) => (
-                <li key={t.name}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDoc(t.doc);
-                      setTab("json");
-                    }}
-                    className="card w-full px-4 py-3 text-left hover:border-accent"
-                  >
-                    <span className="block font-semibold">{t.name}</span>
-                    <span className="text-[12.5px] text-muted">{t.hint}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {tab === "json" ? (
-            <div className="flex grow flex-col gap-2 p-3">
-              <TextArea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                spellCheck={false}
-                className="grow resize-none"
-                aria-label="Widget JSON"
-              />
-              {parsed.error ? (
-                <p className="text-[12.5px] text-bad">Not valid JSON yet: {parsed.error}</p>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="grid content-start gap-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[13px] font-bold uppercase tracking-wider text-muted">Preview</h2>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => parsed.doc && runPreview(parsed.doc)}
-              busy={previewing}
-            >
-              <RefreshCw className="size-4" /> Run again
-            </Button>
-          </div>
-          <article className="card p-4 sm:p-[18px]">
-            <h3 className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">
-              {meta.title || "Widget"}
-            </h3>
-            {preview?.frame ? (
-              <Blocks blocks={preview.frame.blocks} />
-            ) : previewing ? (
-              <div className="skeleton h-20" />
-            ) : (
-              <p className="text-sm text-muted">Nothing to show yet.</p>
+      <div className="mt-4 flex flex-wrap gap-1" role="tablist" aria-label="How to make it">
+        {(
+          [
+            ["build", "Build", PencilRuler],
+            ["designer", "AI designer", Bot],
+            ["templates", "Templates", LayoutTemplate],
+            ["json", "JSON", Braces],
+          ] as const
+        ).map(([key, label, Icon]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={cx(
+              "flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[13px] font-semibold",
+              tab === key ? "bg-accent text-white" : "text-muted hover:text-ink",
             )}
-          </article>
-          {preview?.issues.length ? (
-            <div className="rounded-xl border border-bad/30 bg-bad/10 p-3 text-[13px]">
-              <p className="mb-1 flex items-center gap-1.5 font-semibold text-bad">
-                <TriangleAlert className="size-4" /> Fix these before saving
-              </p>
-              <ul className="list-disc pl-5">
-                {preview.issues.map((i) => (
-                  <li key={`${i.path}${i.message}`}>
-                    <code className="text-[12px]">{i.path}</code>: {i.message}
+          >
+            <Icon className="size-4" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "build" ? (
+        <div className="mt-3">
+          {parsed.doc ? (
+            <Builder
+              doc={parsed.doc}
+              onDoc={setDoc}
+              preview={preview}
+              previewing={previewing}
+              onRerun={() => void runPreview(parsed.doc)}
+              title={meta.title}
+            />
+          ) : (
+            <p className="card p-4 text-sm text-bad">
+              The JSON has a mistake ({parsed.error}). Fix it under JSON, or undo.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <section className="card flex min-h-140 flex-col overflow-hidden">
+            {tab === "designer" ? <Designer draft={parsed.doc} onDraft={setDoc} /> : null}
+            {tab === "templates" ? (
+              <ul className="grid gap-2 p-4">
+                {TEMPLATES.map((t) => (
+                  <li key={t.name}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDoc(t.doc);
+                        setTab("build");
+                      }}
+                      className="card w-full px-4 py-3 text-left hover:border-accent"
+                    >
+                      <span className="block font-semibold">{t.name}</span>
+                      <span className="text-[12.5px] text-muted">{t.hint}</span>
+                    </button>
                   </li>
                 ))}
               </ul>
+            ) : null}
+            {tab === "json" ? (
+              <div className="flex grow flex-col gap-2 p-3">
+                <TextArea
+                  value={text}
+                  onChange={(e) => change(e.target.value)}
+                  spellCheck={false}
+                  className="grow resize-none"
+                  aria-label="Widget JSON"
+                />
+                {parsed.error ? (
+                  <p className="text-[12.5px] text-bad">Not valid JSON yet: {parsed.error}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="grid content-start gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[13px] font-bold uppercase tracking-wider text-muted">Preview</h2>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => parsed.doc && runPreview(parsed.doc)}
+                busy={previewing}
+              >
+                <RefreshCw className="size-4" /> Run again
+              </Button>
             </div>
-          ) : null}
-          {preview?.frame?.blocks.some((b) => b.error) ? (
-            <div className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-[13px]">
-              {preview.frame.blocks
-                .filter((b) => b.error)
-                .map((b) => (
-                  <p key={b.id}>
-                    <b>{b.id}</b>: {b.error}
-                  </p>
-                ))}
-            </div>
-          ) : null}
-          {preview && Object.keys(preview.samples).length ? (
-            <div className="card p-4">
-              <h3 className="mb-2 text-[13px] font-bold uppercase tracking-wider text-muted">
-                What the sources returned
+            <article className="card p-4 sm:p-4.5">
+              <h3 className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">
+                {meta.title || "Widget"}
               </h3>
-              {Object.entries(preview.samples).map(([sid, s]) => (
-                <details key={sid} open className="mb-2">
-                  <summary className="cursor-pointer text-[13.5px] font-semibold">
-                    ${sid}{" "}
+              {preview?.frame ? (
+                <Blocks blocks={preview.frame.blocks} />
+              ) : previewing ? (
+                <div className="skeleton h-20" />
+              ) : (
+                <p className="text-sm text-muted">Nothing to show yet.</p>
+              )}
+            </article>
+            {preview?.issues.length ? (
+              <div className="rounded-xl border border-bad/30 bg-bad/10 p-3 text-[13px]">
+                <p className="mb-1 flex items-center gap-1.5 font-semibold text-bad">
+                  <TriangleAlert className="size-4" /> Fix these before saving
+                </p>
+                <ul className="list-disc pl-5">
+                  {preview.issues.map((i) => (
+                    <li key={`${i.path}${i.message}`}>
+                      <code className="text-[12px]">{i.path}</code>: {i.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {preview?.frame?.blocks.some((b) => b.error) ? (
+              <div className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-[13px]">
+                {preview.frame.blocks
+                  .filter((b) => b.error)
+                  .map((b) => (
+                    <p key={b.id}>
+                      <b>{b.id}</b>: {b.error}
+                    </p>
+                  ))}
+              </div>
+            ) : null}
+            {preview && Object.keys(preview.samples).length ? (
+              <div className="card p-4">
+                <h3 className="mb-2 text-[13px] font-bold uppercase tracking-wider text-muted">
+                  What the sources returned
+                </h3>
+                {Object.entries(preview.samples).map(([sid, s]) => (
+                  <details key={sid} open className="mb-2">
+                    <summary className="cursor-pointer text-[13.5px] font-semibold">
+                      ${sid}{" "}
+                      {s.ok ? (
+                        <span className="text-good">ok</span>
+                      ) : (
+                        <span className="text-bad">· {s.error}</span>
+                      )}
+                    </summary>
                     {s.ok ? (
-                      <span className="text-good">ok</span>
-                    ) : (
-                      <span className="text-bad">· {s.error}</span>
-                    )}
-                  </summary>
-                  {s.ok ? (
-                    <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-[var(--c-background)] p-2 text-[11.5px] ring-1 ring-line">
-                      {JSON.stringify(s.sample, null, 2)}
-                    </pre>
-                  ) : null}
-                </details>
-              ))}
-            </div>
-          ) : null}
-        </section>
-      </div>
+                      <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-page p-2 text-[11.5px] ring-1 ring-line">
+                        {JSON.stringify(s.sample, null, 2)}
+                      </pre>
+                    ) : null}
+                  </details>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -638,7 +722,7 @@ function Designer({ draft, onDraft }: { draft: unknown; onDraft: (doc: unknown) 
                 ? "ml-8 bg-accent text-white"
                 : t.error
                   ? "mr-8 border border-bad/30 bg-bad/10"
-                  : "mr-8 bg-[var(--c-surface-2)]",
+                  : "mr-8 bg-(--c-surface-2)",
             )}
           >
             {t.notes?.length ? (
@@ -682,14 +766,14 @@ function Designer({ draft, onDraft }: { draft: unknown; onDraft: (doc: unknown) 
           rows={2}
           placeholder="What should it show?"
           aria-label="Describe the widget"
-          className="max-h-40 min-h-11 grow resize-none rounded-xl border border-line bg-[var(--c-background)] px-3 py-2 text-[14.5px] focus:border-accent focus:outline-none"
+          className="max-h-40 min-h-11 grow resize-none rounded-xl border border-line bg-page px-3 py-2 text-[14.5px] focus:border-accent focus:outline-none"
         />
         {busy ? (
           <button
             type="button"
             onClick={() => abort.current?.abort()}
             aria-label="Stop"
-            className="grid size-11 place-items-center rounded-xl bg-ink text-[var(--c-background)]"
+            className="grid size-11 place-items-center rounded-xl bg-ink text-page"
           >
             <Square className="size-4 fill-current" />
           </button>

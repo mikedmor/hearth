@@ -12,8 +12,12 @@ import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const SECRET_NAME = /^[a-z0-9][a-z0-9_:.-]{0,63}$/;
-/** Calendar sign-ins and links belong to one person; Google's client is the admin's. */
-const PERSONAL = /^calendar:(?!google-client$)/;
+/**
+ * Kept out of widgets and the Secrets list: calendar sign-ins and links belong to one person
+ * (Google's client is the admin's); the front door's house password and the sign-on client's
+ * secret are only for those.
+ */
+const PERSONAL = /^(calendar:(?!google-client$)|door:|sso:|smarthome:|router:|files:)/;
 export const isPersonalSecret = (name: string) => PERSONAL.test(name);
 
 export async function loadMasterKey(

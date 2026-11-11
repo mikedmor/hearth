@@ -9,12 +9,14 @@ import {
   ArrowUpRight,
   CalendarDays,
   Check,
+  Download,
   Link2,
   Plus,
   Server,
   Settings2,
   TriangleAlert,
   Unplug,
+  Upload,
 } from "lucide-react";
 import { useState } from "react";
 import type { PublicProfile } from "../../../shared/api";
@@ -23,10 +25,11 @@ import {
   CAL_COLORS,
   type CalendarInfo,
   type CalendarView,
+  type ImportSummary,
   type RemoteCalendar,
 } from "../../../shared/calendar";
 import { api } from "../../lib/api";
-import { calendarKey } from "../../lib/calendar";
+import { calendarKey, dayText, localZone, parseWhen } from "../../lib/calendar";
 import { cx } from "../../lib/format";
 import { Avatar } from "../Picker";
 import {
@@ -348,6 +351,16 @@ export function CalendarSettings({
             )}
           </Field>
         ) : null}
+        {calendar.kind === "hearth" ? (
+          <a
+            href={`/api/calendar/calendars/${encodeURIComponent(calendar.id)}/export.ics`}
+            download
+            className="flex items-center gap-2 self-start text-[13.5px] font-semibold text-accent"
+          >
+            <Download className="size-4" /> Download as .ics
+            <span className="font-normal text-muted">for any other calendar app</span>
+          </a>
+        ) : null}
         <ErrorNote error={error} />
         <div className="border-t border-line pt-3">
           {confirm ? (
@@ -386,6 +399,7 @@ type Step =
   | { kind: "link" }
   | { kind: "caldav" }
   | { kind: "google" }
+  | { kind: "import" }
   | { kind: "pick"; account: AccountInfo; calendars: RemoteCalendar[] };
 
 /** An account just connected (Google's sign-in came back): pick its calendars. */
@@ -418,7 +432,9 @@ export function AddCalendar({
             ? "A CalDAV account"
             : step.kind === "google"
               ? "Google Calendar"
-              : "Which calendars?";
+              : step.kind === "import"
+                ? "Import a file"
+                : "Which calendars?";
   return (
     <Modal open onClose={onClose} title={title}>
       {step.kind !== "menu" ? (
@@ -440,6 +456,8 @@ export function AddCalendar({
         <NewCalDav
           onFound={(account, calendars) => setStep({ kind: "pick", account, calendars })}
         />
+      ) : step.kind === "import" ? (
+        <ImportFile view={view} onDone={onClose} />
       ) : step.kind === "google" ? (
         <NewGoogle
           returns={view.googleReturns}
@@ -549,6 +567,12 @@ function Menu({ view, go }: { view: CalendarView; go: (s: Step) => void }) {
         title="A calendar link"
         text="An address ending in .ics: a school's, a team's, holidays, or Google's secret address. Read only."
         onClick={() => go({ kind: "link" })}
+      />
+      <Option
+        icon={<Upload className="size-5" />}
+        title="Import a file"
+        text="An .ics file from another calendar app, an email or a club: its events are copied into one of your calendars, to change as you like."
+        onClick={() => go({ kind: "import" })}
       />
       {view.accounts.length ? (
         <section className="mt-2 grid gap-1">
@@ -961,6 +985,192 @@ function NewGoogle({
   );
 }
 
+const NEW = "__new__";
+
+/** Importing an .ics file: choose it, choose where it goes, see what it holds, then bring it in. */
+function ImportFile({ view, onDone }: { view: CalendarView; onDone: () => void }) {
+  const invalidate = useInvalidate();
+  const toast = useToast();
+  const targets = view.calendars.filter((c) => c.canWrite);
+  const [file, setFile] = useState<{ name: string; text: string } | null>(null);
+  const [into, setInto] = useState<string>(
+    targets.find((c) => c.mine && c.kind === "hearth")?.id ?? targets[0]?.id ?? NEW,
+  );
+  const [name, setName] = useState("");
+  const [color, setColor] = useState<string>(CAL_COLORS[4]);
+  const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
+
+  const body = (dryRun: boolean) => ({
+    ...(into === NEW
+      ? { newCalendar: { name: name.trim() || "Imported", color } }
+      : { calendar: into }),
+    ics: file?.text ?? "",
+    timeZone: localZone(),
+    dryRun,
+  });
+  const look = async (f: { name: string; text: string }, target = into) => {
+    setError(null);
+    setSummary(null);
+    setBusy(true);
+    try {
+      setSummary(
+        await api.post<ImportSummary>("/api/calendar/import", {
+          ...body(true),
+          ics: f.text,
+          ...(target === NEW ? { newCalendar: { name: "Imported", color } } : { calendar: target }),
+        }),
+      );
+    } catch (e) {
+      setError(e);
+    }
+    setBusy(false);
+  };
+  const choose = async (picked: File | undefined) => {
+    if (!picked) return;
+    if (picked.size > 6 * 1024 * 1024) {
+      setError(new Error("That file is bigger than 6 MB."));
+      return;
+    }
+    const f = { name: picked.name, text: await picked.text() };
+    setFile(f);
+    if (!name) setName(picked.name.replace(/\.(ics|ical|ifb|icalendar)$/i, "").slice(0, 60));
+    await look(f);
+  };
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<ImportSummary>("/api/calendar/import", body(false));
+      toast(
+        r.added
+          ? `Imported ${r.added} event${r.added === 1 ? "" : "s"}${r.duplicates ? `; ${r.duplicates} were already there` : ""}`
+          : "Everything in that file was already there",
+      );
+      await invalidate();
+      onDone();
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
+
+  const day = (d: string) => dayText(parseWhen(d));
+  const range = summary?.first
+    ? summary.last === "…"
+      ? `from ${day(summary.first)}, some with no end`
+      : summary.last && summary.last !== summary.first
+        ? `${day(summary.first)} – ${day(summary.last)}`
+        : day(summary.first)
+    : "";
+  return (
+    <div className="grid gap-4 text-[14px]">
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          void choose(e.dataTransfer.files[0]);
+        }}
+        className={cx(
+          "grid cursor-pointer place-items-center gap-1 rounded-2xl border-2 border-dashed px-4 py-6 text-center transition",
+          over ? "border-accent bg-accent/10" : "border-line hover:border-accent",
+        )}
+      >
+        <Upload className="size-6 text-accent" />
+        <span className="font-semibold">
+          {file ? file.name : "Choose an .ics file, or drop it here"}
+        </span>
+        <span className="text-[12.5px] text-muted">
+          From Outlook, Apple Calendar, Google (Settings → Export), or a club's schedule.
+        </span>
+        <input
+          type="file"
+          accept=".ics,.ical,.icalendar,text/calendar"
+          className="sr-only"
+          onChange={(e) => void choose(e.target.files?.[0])}
+        />
+      </label>
+
+      <Field label="Into">
+        {(id) => (
+          <Select
+            id={id}
+            value={into}
+            onChange={(e) => {
+              setInto(e.target.value);
+              if (file) void look(file, e.target.value);
+            }}
+          >
+            {targets.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.account ? ` (${c.account.name})` : c.mine ? "" : " (shared)"}
+              </option>
+            ))}
+            {!view.locked ? <option value={NEW}>A new calendar…</option> : null}
+          </Select>
+        )}
+      </Field>
+      {into === NEW ? (
+        <>
+          <Field label="Name">
+            {(id) => (
+              <Input
+                id={id}
+                value={name}
+                maxLength={60}
+                onChange={(e) => setName(e.target.value)}
+              />
+            )}
+          </Field>
+          <Colors value={color} onChange={setColor} />
+        </>
+      ) : null}
+
+      {summary ? (
+        <div className="grid gap-1 rounded-xl bg-(--c-surface-2) px-3 py-2.5">
+          <p className="font-semibold">
+            {summary.events} event{summary.events === 1 ? "" : "s"}
+            {summary.repeating ? `, ${summary.repeating} repeating` : ""}
+            {range ? `, ${range}` : ""}
+          </p>
+          {summary.changedTimes ? (
+            <p className="text-[12.5px] text-muted">
+              {summary.changedTimes} time
+              {summary.changedTimes === 1
+                ? " of a repeating event was"
+                : "s of repeating events were"}{" "}
+              moved or cancelled in the file; that's kept.
+            </p>
+          ) : null}
+          {summary.duplicates ? (
+            <p className="text-[12.5px] text-muted">
+              {summary.duplicates} {summary.duplicates === 1 ? "is" : "are"} already in this
+              calendar from before, and won't be added again.
+            </p>
+          ) : null}
+          {summary.notes.map((n) => (
+            <p key={n} className="text-[12.5px] text-muted">
+              {n}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      <ErrorNote error={error} />
+      <Button variant="primary" busy={busy} disabled={!file || !summary} onClick={go}>
+        Import
+      </Button>
+    </div>
+  );
+}
+
 function Pick({
   account,
   calendars,
@@ -1023,7 +1233,7 @@ function Pick({
                       return n;
                     })
                   }
-                  className="size-4 accent-(--c-accent)"
+                  className="size-4 accent-accent"
                 />
                 <span
                   className="size-3 flex-none rounded-full"

@@ -28,7 +28,7 @@ export function ModelPicker({
         placeholder="Model name"
         spellCheck={false}
         className={cx(
-          "rounded-xl border border-line bg-[var(--c-background)] px-3 text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none",
+          "rounded-xl border border-line bg-page px-3 text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none",
           className,
         )}
       />

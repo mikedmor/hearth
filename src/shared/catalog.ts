@@ -12,6 +12,7 @@
  *   {{secret:key}}       the app's API key (stored as a Hearth secret, never in the widget)
  *   {{param:name}}       a setting asked for when adding it (a status page's name, an entity)
  */
+import type { AuthWay } from "./access";
 import type { WidgetDocInput } from "./widget-doc";
 
 export const CATEGORIES = [
@@ -35,8 +36,11 @@ export type Category = (typeof CATEGORIES)[number];
 export interface AppSecret {
   label: string;
   hint: string;
-  /** "basic": ask for a user name and password, stored as an Authorization header value. */
-  kind?: "key" | "basic" | "bearer";
+  /**
+   * "basic": ask for a user name and password, stored as an Authorization header value.
+   * "digest": the same, stored as "user:password" for a source's `digest`.
+   */
+  kind?: "key" | "basic" | "bearer" | "digest";
 }
 
 export interface AppParam {
@@ -70,8 +74,76 @@ export interface AppDef {
   /** Usually served over https on those ports. */
   https?: boolean;
   /** How to recognise it: the page title, or text in the page, or a probe path's answer. */
-  match: { title?: string; body?: string; header?: string; probe?: { path: string; body: string } };
+  match: {
+    title?: string;
+    body?: string;
+    header?: string;
+    /** A path to ask: its answer holds `body` (and is a success), or a header matches `header`. */
+    probe?: { path: string; body?: string; header?: string };
+  };
   widgets?: AppWidget[];
+  /** Ways it takes a sign-in, beyond what its widgets use (worked out by `authWays`). */
+  auth?: AuthWay[];
+}
+
+/**
+ * The ways an app takes a sign-in: the ones it says, then what its widgets do with their key (a
+ * header, a bearer token, a user and password, a digest, a parameter in the address).
+ */
+export function authWays(app: AppDef): AuthWay[] {
+  const out: AuthWay[] = [...(app.auth ?? [])];
+  const add = (w: AuthWay) => {
+    if (!out.some((x) => x.kind === w.kind && x.header === w.header && x.param === w.param))
+      out.push(w);
+  };
+  for (const wd of app.widgets ?? []) {
+    if (!wd.secret) continue;
+    const label = wd.secret.label;
+    const hint = wd.secret.hint;
+    for (const s of wd.doc.sources ?? []) {
+      if (s.kind !== "http") continue;
+      if (s.digest?.includes("{{secret:key}}")) add({ kind: "digest", label, hint });
+      for (const [h, v] of Object.entries(s.headers ?? {})) {
+        if (!v.includes("{{secret:key}}")) continue;
+        if (/^authorization$/i.test(h)) {
+          // The widget says what its key is: a token ("Bearer …"), a user and password, or the
+          // whole header value.
+          const k = wd.secret.kind;
+          if (/bearer/i.test(v) || k === "bearer") add({ kind: "bearer", label, hint });
+          else if (k === "basic") add({ kind: "basic", label, hint });
+          else add({ kind: "header", header: h, label, hint });
+        } else add({ kind: "header", header: h, label, hint });
+      }
+      const q = /[?&]([A-Za-z0-9_.-]+)=\{\{secret:key\}\}/.exec(s.url);
+      if (q?.[1]) add({ kind: "query", param: q[1], label, hint });
+    }
+  }
+  return out;
+}
+
+/**
+ * An app's widget reading through the access Hearth keeps for it: each source on the app's own
+ * address becomes a connection source, so the widget holds no key at all.
+ */
+export function throughAccess(doc: WidgetDocInput, accessId: string): WidgetDocInput {
+  return {
+    ...doc,
+    sources: (doc.sources ?? []).map((s) => {
+      if (s.kind !== "http" || !s.url.startsWith("{{base}}")) return s;
+      return {
+        id: s.id,
+        kind: "connection" as const,
+        to: `app:${accessId}`,
+        get:
+          s.url.slice("{{base}}".length).replace(/[?&][A-Za-z0-9_.-]+=\{\{secret:key\}\}/, "") ||
+          "/",
+        every: s.every,
+        path: s.path,
+        track: s.track,
+        keep: s.keep,
+      };
+    }),
+  };
 }
 
 const arrKey: AppSecret = { label: "API key", hint: "Settings → General → Security → API Key." };
@@ -805,6 +877,56 @@ export const APPS: AppDef[] = [
     description: "Smart home",
     ports: [8080, 8443],
     match: { title: "openHAB" },
+    widgets: [
+      {
+        id: "things",
+        name: "openHAB: things",
+        description: "How many of openHAB's things are online, and which aren't.",
+        secret: {
+          label: "API token",
+          hint: "In openHAB: your profile (bottom left) → API tokens → Create new API token.",
+          kind: "bearer",
+        },
+        doc: {
+          v: 1,
+          sources: [
+            {
+              id: "things",
+              kind: "http",
+              url: "{{base}}/rest/things?summary=true",
+              every: 120,
+              headers: { Authorization: "{{secret:key}}" },
+            },
+          ],
+          values: [
+            { id: "online", expr: 'count(filter($things, "statusInfo.status", "==", "ONLINE"))' },
+            { id: "off", expr: 'filter($things, "statusInfo.status", "!=", "ONLINE")' },
+          ],
+          blocks: [
+            {
+              id: "count",
+              kind: "stat",
+              w: 12,
+              label: "Things online",
+              value: "$online",
+              sub: "of {{ count($things) }}",
+              tone: 'count($off) > 0 ? "warning" : "positive"',
+              size: "md",
+            },
+            {
+              id: "offline",
+              kind: "list",
+              w: 12,
+              title: "Not online",
+              items: "take($off, 5)",
+              itemTitle: "$item.label",
+              itemDetail: "lower($item.statusInfo.status)",
+              empty: "Everything is online.",
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     id: "homebridge",
@@ -1793,6 +1915,41 @@ export const APPS: AppDef[] = [
     https: true,
     // Its home page is a 404; the list of provisioners says what it is.
     match: { probe: { path: "/provisioners", body: '"provisioners"' } },
+    widgets: [
+      {
+        id: "health",
+        name: "step-ca: health",
+        description: "Whether the home's certificate authority is answering.",
+        doc: {
+          v: 1,
+          sources: [{ id: "health", kind: "http", url: "{{base}}/health", every: 300 }],
+          blocks: [
+            {
+              id: "state",
+              kind: "stat",
+              w: 12,
+              label: "Certificate authority",
+              value: '$health.status == "ok" ? "Healthy" : "Not answering"',
+              tone: '$health.status == "ok" ? "positive" : "negative"',
+              size: "md",
+            },
+          ],
+        },
+      },
+    ],
+  },
+
+  // Games
+  {
+    id: "vpin-studio",
+    name: "VPin Studio",
+    icon: "lucide:joystick",
+    color: "#e0533d",
+    category: "Home",
+    description: "Pinball table manager",
+    ports: [8089],
+    // Its server is an API with no page; "what system is this" says what it is.
+    match: { probe: { path: "/api/v1/system", body: '"systemName"' } },
   },
 
   // AI
@@ -1817,6 +1974,132 @@ export const APPS: AppDef[] = [
 
   // Printing
   {
+    id: "prusalink",
+    name: "PrusaLink",
+    icon: "lucide:box",
+    color: "#fa6831",
+    category: "Home",
+    description: "Prusa printers (MK4, XL, MINI, CORE One)",
+    ports: [80],
+    // Its page comes gzipped, and its API asks for a Digest sign-in in the "Printer API" realm.
+    match: {
+      title: "PrusaLink|Prusa Link",
+      probe: { path: "/api/version", header: 'www-authenticate: Digest realm="Printer API"' },
+    },
+    // Either its API key, or the user and password (Digest).
+    auth: [
+      {
+        kind: "header",
+        header: "X-Api-Key",
+        label: "API key",
+        hint: "On the printer: Settings → Network → PrusaLink, or in Prusa Connect's printer settings.",
+      },
+      {
+        kind: "digest",
+        label: "User name and password",
+        hint: "On the printer: Settings → Network → PrusaLink (the user is usually maker).",
+      },
+    ],
+    widgets: [
+      {
+        id: "status",
+        name: "PrusaLink: print status",
+        description: "What's printing, how far along, time left, and the temperatures.",
+        secret: {
+          label: "User name and password",
+          hint: "On the printer: Settings → Network → PrusaLink (the user is usually maker).",
+          kind: "digest",
+        },
+        doc: {
+          v: 1,
+          sources: [
+            {
+              id: "status",
+              kind: "http",
+              url: "{{base}}/api/v1/status",
+              every: 15,
+              digest: "{{secret:key}}",
+            },
+            {
+              id: "job",
+              kind: "http",
+              url: "{{base}}/api/v1/job",
+              every: 30,
+              digest: "{{secret:key}}",
+            },
+            {
+              // Its name and where it is, as set on the printer.
+              id: "info",
+              kind: "http",
+              url: "{{base}}/api/v1/info",
+              every: 3600,
+              digest: "{{secret:key}}",
+            },
+          ],
+          values: [
+            { id: "s", expr: 'upper(default($status.printer.state, ""))' },
+            {
+              id: "state",
+              expr: '$s == "IDLE" ? "Idle" : $s == "READY" ? "Ready" : $s == "PRINTING" ? "Printing" : $s == "PAUSED" ? "Paused" : $s == "FINISHED" ? "Finished" : $s == "STOPPED" ? "Stopped" : $s == "ATTENTION" ? "Needs attention" : $s == "ERROR" ? "Error" : $s == "BUSY" ? "Busy" : default($status.printer.state, "Not answering")',
+            },
+          ],
+          blocks: [
+            {
+              id: "name",
+              kind: "heading",
+              w: 12,
+              text: '{{ default($info.name, default($info.hostname, "Printer")) }}{{ $info.location ? " · " + $info.location : "" }}',
+            },
+            {
+              id: "state",
+              kind: "stat",
+              w: 6,
+              label: "Now",
+              value: "$state",
+              tone: '$s == "PRINTING" ? "positive" : $s == "ERROR" || $s == "ATTENTION" ? "negative" : $s == "PAUSED" ? "warning" : "normal"',
+              size: "md",
+            },
+            {
+              id: "left",
+              kind: "stat",
+              w: 6,
+              label: "Time left",
+              value: '$status.job.progress > 0 ? duration($status.job.time_remaining) : "—"',
+              size: "md",
+            },
+            {
+              id: "job",
+              kind: "progress",
+              w: 12,
+              label: '{{ default($job.file.display_name, "No print") }}',
+              value: "default($status.job.progress, 0)",
+              max: "100",
+              detail: "{{ round(default($status.job.progress, 0)) }}%",
+            },
+            {
+              id: "temps",
+              kind: "pairs",
+              w: 12,
+              items: [
+                {
+                  label: "Nozzle",
+                  // The target only while it's heating.
+                  value:
+                    '{{ round($status.printer.temp_nozzle) }}°{{ $status.printer.target_nozzle > 0 ? " → " + round($status.printer.target_nozzle) + "°" : "" }}',
+                },
+                {
+                  label: "Bed",
+                  value:
+                    '{{ round($status.printer.temp_bed) }}°{{ $status.printer.target_bed > 0 ? " → " + round($status.printer.target_bed) + "°" : "" }}',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
+  {
     id: "octoprint",
     name: "OctoPrint",
     icon: "si:octoprint",
@@ -1824,6 +2107,81 @@ export const APPS: AppDef[] = [
     description: "3D printer",
     ports: [80, 5000],
     match: { title: "OctoPrint" },
+    widgets: [
+      {
+        id: "status",
+        name: "OctoPrint: print status",
+        description: "What's printing, how far along, time left, and the temperatures.",
+        secret: {
+          label: "API key",
+          hint: "In OctoPrint: Settings → Application Keys (or Settings → API → Global API Key).",
+        },
+        doc: {
+          v: 1,
+          sources: [
+            {
+              id: "job",
+              kind: "http",
+              url: "{{base}}/api/job",
+              every: 20,
+              headers: { "X-Api-Key": "{{secret:key}}" },
+            },
+            {
+              id: "printer",
+              kind: "http",
+              url: "{{base}}/api/printer",
+              every: 20,
+              headers: { "X-Api-Key": "{{secret:key}}" },
+            },
+          ],
+          blocks: [
+            {
+              id: "state",
+              kind: "stat",
+              w: 6,
+              label: "Printer",
+              value: "lower($job.state)",
+              tone: 'lower($job.state) == "printing" ? "positive" : contains(lower($job.state), "error") ? "negative" : "normal"',
+              size: "md",
+            },
+            {
+              id: "left",
+              kind: "stat",
+              w: 6,
+              label: "Time left",
+              value: '$job.progress.completion > 0 ? duration($job.progress.printTimeLeft) : "—"',
+              size: "md",
+            },
+            {
+              id: "job",
+              kind: "progress",
+              w: 12,
+              label: '{{ default($job.job.file.display, "No print") }}',
+              value: "default($job.progress.completion, 0)",
+              max: "100",
+              detail: "{{ round(default($job.progress.completion, 0)) }}%",
+            },
+            {
+              id: "temps",
+              kind: "pairs",
+              w: 12,
+              items: [
+                {
+                  label: "Nozzle",
+                  value:
+                    '{{ round($printer.temperature.tool0.actual) }}°{{ $printer.temperature.tool0.target > 0 ? " → " + round($printer.temperature.tool0.target) + "°" : "" }}',
+                },
+                {
+                  label: "Bed",
+                  value:
+                    '{{ round($printer.temperature.bed.actual) }}°{{ $printer.temperature.bed.target > 0 ? " → " + round($printer.temperature.bed.target) + "°" : "" }}',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     id: "mainsail",
@@ -1909,6 +2267,29 @@ export const APPS: AppDef[] = [
     description: "Cameras",
     ports: [8765],
     match: { title: "motionEye" },
+    widgets: [
+      {
+        id: "camera",
+        name: "motionEye: camera",
+        description:
+          "A camera's picture, refreshed every few seconds. Hearth fetches it, so the camera stays private.",
+        params: [
+          {
+            key: "snapshot",
+            label: "Snapshot address",
+            hint: "In motionEye: the camera's settings → Video Streaming → Useful URLs → Snapshot URL.",
+            default: "http://",
+          },
+        ],
+        doc: {
+          v: 1,
+          sources: [],
+          blocks: [
+            { id: "cam", kind: "image", w: 12, src: "{{param:snapshot}}", every: 5, height: 220 },
+          ],
+        },
+      },
+    ],
   },
   {
     id: "scrypted",
@@ -2048,7 +2429,7 @@ export interface GeneralTemplate {
 export const GENERAL_TEMPLATES: GeneralTemplate[] = [
   {
     id: "services-lights",
-    name: "Services as lights",
+    name: "Service Health",
     icon: "lucide:traffic-cone",
     description: "Every service Hearth checks, as a light, with how many are up.",
     doc: {

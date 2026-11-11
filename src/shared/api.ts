@@ -1,6 +1,8 @@
 /** What the API and the live socket send to the page. */
+
 import type { AiServer, Audience, Layout, Role, SectionKind, WidgetType } from "./config";
 import type { Look, Theme } from "./themes";
+import type { WebSearch } from "./web-search";
 import type { WidgetDocInput, WidgetFrame } from "./widget-doc";
 
 /** A library icon, ready to draw: a logo's path and brand colour, or a symbol's strokes. */
@@ -15,6 +17,38 @@ export interface IconResult {
   label: string;
   kind: "brand" | "symbol" | "emoji";
   svg?: IconSvg;
+}
+
+/** `GET /api/sso`: whether "Sign in with …" is offered. Public. */
+export interface SsoInfo {
+  enabled: boolean;
+  label: string;
+}
+
+/** `GET /api/admin/sso`. */
+export interface SsoAdmin {
+  issuer?: string;
+  clientId?: string;
+  label: string;
+  adminGroup?: string;
+  secretSaved: boolean;
+  links: { profile: string; label?: string }[];
+}
+
+/** `GET /api/trust`: the home's root certificate, for the trust page. Public. */
+export interface TrustInfo {
+  /** A root is mounted. */
+  available: boolean;
+  /** Why the mounted file can't be offered (a private key in it, not a CA…). */
+  error?: string;
+  name?: string;
+  /** SHA-256 of the root, "AB:CD:…". */
+  fingerprint?: string;
+  validTo?: string;
+  /** Less than six months left. */
+  expiresSoon?: boolean;
+  /** Pages opened over plain http move to https on devices that trust the root. */
+  redirect: boolean;
 }
 
 export interface PublicProfile {
@@ -95,6 +129,24 @@ export interface HomeView {
   /** May add their own sections and links (a profile that isn't locked, or the admin). */
   canAddOwn: boolean;
   canChat: boolean;
+  /** May open Files (by role, in Settings → People). */
+  canFiles: boolean;
+  /** May open the calendar (by role; it needs a profile). */
+  canCalendar: boolean;
+  /** The admin's: a newer release of Hearth (from the update check). */
+  update?: string;
+  /** Where the search box searches the web (off: undefined). The browser goes there itself. */
+  webSearch?: WebSearch;
+  /** May open the Family page (the admin, or a parent they chose, with a PIN). */
+  family?: boolean;
+  /** Children's requests waiting on the Family page (for parents). */
+  familyPending?: number;
+  /** Whose device this is, if it's saved as someone's (their page can open by itself). */
+  deviceOwner?: string;
+  /** Hearth knows whether this browser trusts the home's certificate (if not, the page says). */
+  trustKnown?: boolean;
+  /** The page Hearth serves now (its script's name): an open tab that differs is out of date. */
+  build?: string;
   look: Look;
   /** Custom themes made in this home (built-in ones ship with the page). */
   themes: Theme[];
@@ -107,6 +159,10 @@ export interface HomeView {
   groupOrder: string[];
   groups: ViewGroup[];
   widgets: ViewWidget[];
+  /** Sections and widgets in one order, when widgets are mixed in ("g:<id>", "w:<id>"). */
+  board: string[];
+  /** Board keys linked to the one before them (they move and show as one). */
+  joined: string[];
   /** Widgets that could be added to this page. */
   library: { id: string; type: WidgetType; title?: string }[];
 }
@@ -140,6 +196,10 @@ export interface NoteWidgetData {
 
 export interface CountdownWidgetData {
   events: { name: string; date: string; emoji?: string; days: number }[];
+  /** How many to show in all: the viewer's own calendar fills the rest. */
+  show?: number;
+  /** Add what's next on the viewer's calendar. */
+  calendar?: boolean;
 }
 
 export interface AiWidgetData {
@@ -150,6 +210,61 @@ export interface AiWidgetData {
     models: number;
     loaded: string[];
     ms?: number;
+    /** The computers a shared server lends work to, when it lists them. */
+    machines?: {
+      name: string;
+      online: boolean;
+      busy: boolean;
+      available: boolean;
+      reason?: string;
+      loaded?: string;
+      jobs?: number;
+      /** Answers given since it connected, and how long they took on average. */
+      served?: number;
+      avgMs?: number;
+      os?: string;
+      /** Its graphics cards ("RTX 4090") and their memory together. */
+      gpu?: string;
+      vramMib?: number;
+      memoryMib?: number;
+    }[];
+  }[];
+}
+
+/** A pinball table running VPin Studio: what's on, and the latest high scores. */
+export interface PinballWidgetData {
+  /** No table found yet (none has VPin Studio, or the one chosen is gone). */
+  missing?: boolean;
+  name?: string;
+  /** Its row on the Devices page, for the admin's controls. */
+  device?: string;
+  muted?: boolean;
+  /** VPin Studio answered just now. */
+  on: boolean;
+  playing?: { id: number; name: string; since?: string };
+  /** The table played last (when none is being played). */
+  last?: { id: number; name: string };
+  frontendRunning?: boolean;
+  tables?: number;
+  /** Tables played lately, newest first: one tap to start again. */
+  recent: { id: number; name: string }[];
+  scores: {
+    initials: string;
+    score: string;
+    table: string;
+    gameId?: number;
+    position?: number;
+    label?: string;
+    at?: string;
+  }[];
+  players: {
+    name: string;
+    initials?: string;
+    rank: number;
+    points: number;
+    first: number;
+    second: number;
+    third: number;
   }[];
 }
 
@@ -158,6 +273,7 @@ export interface WidgetDataMap {
   note: NoteWidgetData;
   countdown: CountdownWidgetData;
   ai: AiWidgetData;
+  pinball: PinballWidgetData;
   ask: Record<string, never>;
   agenda: { days: number };
   clock: ClockWidgetData;
@@ -184,7 +300,7 @@ export type LiveClientMessage = { type: "watch"; widgets: string[] } | { type: "
 export type LiveServerMessage =
   | { type: "status"; data: StatusMap }
   | { type: "widget"; update: WidgetUpdate }
-  | { type: "changed"; what: "config" | "session" | "calendar" }
+  | { type: "changed"; what: "config" | "session" | "calendar" | "internet" | "devices" }
   | { type: "pong" };
 
 // ---------------------------------------------------------------------------
@@ -208,6 +324,37 @@ export interface AiLoadedModel {
   size?: number;
   /** When it will be unloaded (ISO time). */
   until?: string;
+}
+
+/** A computer a shared AI server lends work to, as the server lists it for apps. */
+export interface AiMachine {
+  id: string;
+  name: string;
+  online: boolean;
+  /** Free to answer (its owner's rules can say no: a game is running). */
+  available: boolean;
+  reason?: string;
+  busy: boolean;
+  jobs: number;
+  /** Answers it has given since it connected. */
+  served: number;
+  avgMs?: number;
+  connectedSecs?: number;
+  version?: string;
+  os?: string;
+  models: string[];
+  loaded?: string;
+  fetching?: { model: string; percent: number };
+  /** Where it connects from, while it's online. */
+  address?: string;
+  mac?: string;
+  canWake: boolean;
+  hardware?: {
+    cpu: string;
+    cores: number;
+    memoryMib: number;
+    gpus: { name: string; vramMib: number }[];
+  };
 }
 
 /** `GET /api/ai/servers`: each server as last checked. */

@@ -22,6 +22,7 @@ import { Eye, EyeOff, GripVertical, Palette, Pencil, Plus, Search, Star, X } fro
 import { useEffect, useRef, useState } from "react";
 import type { HomeView, ViewTile, ViewWidget } from "../../shared/api";
 import { type SectionKind, WIDGET_WIDTHS } from "../../shared/config";
+import { go, WebActionRow, webActions } from "../components/CommandSearch";
 import { Tile } from "../components/Tile";
 import { contextFromView, useTileEditors } from "../components/TileEditors";
 import { Button, IconButton, Modal, useToast } from "../components/ui";
@@ -98,7 +99,7 @@ export function HomePage() {
             );
           })
       )}
-      {results ? <Results results={results} query={query} /> : null}
+      {results ? <Results results={results} query={query} view={view} /> : null}
       {!editing && view.canEdit ? (
         <div className="fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex gap-2">
           <button
@@ -247,20 +248,28 @@ function SearchBox({
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             const t = first();
+            const newTab = e.ctrlKey || e.metaKey;
             if (t) {
               e.preventDefault();
-              if (e.ctrlKey || e.metaKey || t.newTab) window.open(t.url, "_blank", "noopener");
-              else location.href = t.url;
+              go(t.url, newTab || t.newTab);
+            } else {
+              const a = webActions(view, query)[0];
+              if (a) {
+                e.preventDefault();
+                go(a.url, newTab);
+              }
             }
           } else if (e.key === "Escape") setQuery("");
         }}
         placeholder="Search or jump to…"
-        aria-label="Search the home's services"
+        aria-label={
+          view.webSearch ? "Search the home's services or the web" : "Search the home's services"
+        }
         autoComplete="off"
         spellCheck={false}
-        className="card h-[52px] w-full rounded-2xl! pr-12 pl-12 text-[16px] text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-4 focus:ring-[var(--c-accent-soft)]"
+        className="card h-13 w-full rounded-2xl! pr-12 pl-12 text-[16px] text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-4 focus:ring-(--c-accent-soft)"
       />
-      <kbd className="pointer-events-none absolute right-4 hidden h-6 min-w-6 place-items-center rounded-md border border-[var(--c-line-strong)] px-1.5 text-xs font-semibold text-muted [@media(hover:hover)]:grid">
+      <kbd className="pointer-events-none absolute right-4 hidden h-6 min-w-6 place-items-center rounded-md border border-(--c-line-strong) px-1.5 text-xs font-semibold text-muted [@media(hover:hover)]:grid">
         /
       </kbd>
     </label>
@@ -290,16 +299,36 @@ function TileSection({
   );
 }
 
-function Results({ results, query }: { results: ViewTile[]; query: string }) {
+function Results({ results, query, view }: { results: ViewTile[]; query: string; view: HomeView }) {
+  const actions = webActions(view, query);
+  const web = actions.length ? (
+    <div className="card mb-7 grid p-1.5">
+      {actions.map((a, i) => (
+        <WebActionRow key={a.id} action={a} active={!results.length && i === 0} />
+      ))}
+    </div>
+  ) : null;
   if (!results.length) {
-    return (
+    return web ? (
+      <>
+        <p className="mx-0.5 mb-3 text-[13px] text-muted">
+          Nothing called “{query.trim()}” here. Enter takes the first choice below.
+        </p>
+        {web}
+      </>
+    ) : (
       <div className="card p-8 text-center">
         <p className="font-semibold">Nothing called “{query.trim()}” here.</p>
         <p className="mt-1 text-sm text-muted">Try another word, or press Esc to see everything.</p>
       </div>
     );
   }
-  return <TileSection title="Results · Enter opens the first" tiles={results} first />;
+  return (
+    <>
+      <TileSection title="Results · Enter opens the first" tiles={results} first />
+      {web}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +467,7 @@ function SortableSection({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cx(
         "relative mb-4 rounded-[calc(var(--radius)+6px)] border-2 border-dashed border-line p-3",
-        isDragging && "z-20 border-accent bg-[var(--c-background)] shadow-2xl",
+        isDragging && "z-20 border-accent bg-page shadow-2xl",
         hidden && "opacity-55",
       )}
     >
@@ -509,7 +538,7 @@ function EditWidgets({
               <button
                 type="button"
                 onClick={() => setAdding(true)}
-                className="grid h-full min-h-28 w-full place-items-center rounded-[var(--radius)] border-2 border-dashed border-line text-muted transition hover:border-accent hover:text-accent"
+                className="grid h-full min-h-28 w-full place-items-center rounded-(--radius) border-2 border-dashed border-line text-muted transition hover:border-accent hover:text-accent"
               >
                 <span className="flex items-center gap-2 font-semibold">
                   <Plus className="size-5" /> Add a widget

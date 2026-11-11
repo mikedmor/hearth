@@ -35,6 +35,7 @@ The setup code for the admin password is in the terminal. Local data lives in `d
 | `npm run build`         | Production build: `dist/web`, the bundled `dist/server/index.js` and the icon library |
 | `npm start`             | Run the production build on http://localhost:8082                                    |
 | `npm run import:heimdall -- <app.sqlite>` | Import Heimdall's apps (add `--write` to apply)                  |
+| `npm run deploy:nas`    | Build and restart Hearth's own container on a server over SSH (`HEARTH_DEPLOY_HOST` in `.env`); ships the committed HEAD, or with `-- --working-tree` exactly what a commit would hold |
 
 ### Repository layout
 
@@ -65,5 +66,17 @@ docker/           The compose file
 - One change per pull request, with tests for new behaviour. `npm run check` must pass.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 - User-facing changes get a line in [CHANGELOG.md](CHANGELOG.md) under **Unreleased**, and an update to the matching guide.
+
+## Releases
+
+Versions follow [Semantic Versioning](https://semver.org/).
+
+1. `npm version 1.2.0 --no-git-tag-version`
+2. Move the `[Unreleased]` notes in [CHANGELOG.md](CHANGELOG.md) under `## [1.2.0] - YYYY-MM-DD`.
+3. Commit (`chore(release): 1.2.0`) and push, then push the tag: `git tag v1.2.0 && git push origin v1.2.0`.
+
+The Release workflow checks that the tag matches `package.json` and has a changelog entry, runs `npm run check`, publishes `ghcr.io/mikedmor/hearth` for amd64 and arm64 (tagged `1.2.0`, `1.2`, `1` and `latest`), and creates the GitHub release from the changelog. Hearth's update check reads that release.
+
+## License
 
 By contributing, you agree your work is licensed under the project's [AGPL-3.0 license](LICENSE).
