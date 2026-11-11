@@ -3,7 +3,9 @@
 A tiny static site that Google needs before it lets a home's own Hearth use Google Calendar
 without signing everyone out every 7 days (see [Calendar](../guides/calendar.md#setting-up-google-the-admin-once)):
 
-- `index.html`: a home page for the app.
+- `index.html`: a home page for the app: what it does, screenshots, how to install it, and how it
+  uses Google Calendar.
+- `shots/`: the screenshots on the home page, taken from a demo home with a made-up family.
 - `privacy.html`: its privacy policy.
 - `terms.html`: its terms of service.
 - `google/`: the return page. After "Sign in with Google" in Hearth, Google sends the browser

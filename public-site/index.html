@@ -3,44 +3,505 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hearth</title>
-    <meta name="description" content="Hearth, a home's own start page, and how it uses Google Calendar." />
+    <title>Hearth · A start page for the whole family</title>
+    <meta
+      name="description"
+      content="Hearth is a self-hosted start page for a home network: every service one tap away with live status, a page for each person, widgets, and everyone's own calendar. This site also explains how Hearth uses Google Calendar."
+    />
+    <meta property="og:title" content="Hearth · A start page for the whole family" />
+    <meta property="og:description" content="Every service in the house one tap away, a page for each person, and everyone's calendar. Self-hosted in one container." />
+    <meta property="og:type" content="website" />
+    <meta name="color-scheme" content="light dark" />
     <!-- If Google asks you to prove this site is yours (Search Console, "HTML tag"), paste its
          <meta name="google-site-verification" ...> tag on the next line. -->
-    <link rel="stylesheet" href="style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23e8743b' d='M16 3c1.2 4.3 6.8 7.3 7.9 12.6C25 21 21.4 28 16 28S7 21.7 8.2 16.4c.6-2.6 2.4-4.2 3.5-5.6.3 2.2 1.2 3.5 2.5 4.2C13.5 10.6 14.6 6.5 16 3Z'/%3E%3Cpath fill='%23ffd48f' d='M16.4 15.5c.6 2.4 3.6 3.8 3.6 6.7 0 2.7-1.8 4.3-4 4.3s-4-1.6-4-4.1c0-1.9 1.3-3 2.1-3.8.2 1.2.7 1.8 1.4 2.2-.2-2 .2-3.8.9-5.3Z'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        --bg: #faf6f1;
+        --bg-2: #f3ece4;
+        --card: #ffffff;
+        --ink: #2a211b;
+        --muted: #6f6157;
+        --faint: #9a8b80;
+        --line: #e8ddd2;
+        --accent: #e8743b;
+        --accent-ink: #b9531f;
+        --glow: rgb(232 116 59 / 0.18);
+        --shadow: 0 1px 2px rgb(60 30 10 / 0.05), 0 20px 50px -20px rgb(60 30 10 / 0.25);
+        --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #120e0b;
+          --bg-2: #18120e;
+          --card: #1e1814;
+          --ink: #f3ece6;
+          --muted: #b1a194;
+          --faint: #7d6e62;
+          --line: #2e2620;
+          --accent-ink: #ff9a63;
+          --glow: rgb(232 116 59 / 0.22);
+          --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 24px 60px -20px rgb(0 0 0 / 0.8);
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
+      body {
+        margin: 0;
+        background: radial-gradient(70rem 40rem at 50% -10%, var(--glow), transparent 65%), var(--bg);
+        color: var(--ink);
+        font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+      a { color: var(--accent-ink); font-weight: 600; }
+      img { display: block; max-width: 100%; }
+      .wrap { max-width: 72rem; margin: 0 auto; padding: 0 1.25rem; }
+      :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+      /* Top bar */
+      .top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); background: color-mix(in oklab, var(--bg) 78%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--line) 60%, transparent); }
+      .top .wrap { display: flex; align-items: center; gap: 1rem; height: 3.6rem; }
+      .logo { display: inline-flex; align-items: center; gap: 0.55rem; color: var(--ink); text-decoration: none; font-size: 1.2rem; font-weight: 800; }
+      .logo svg { width: 1.8rem; height: 1.8rem; }
+      .top nav { margin-left: auto; display: flex; gap: 0.15rem; }
+      .top nav a { padding: 0.35rem 0.7rem; border-radius: 999px; color: var(--muted); font-size: 0.9rem; text-decoration: none; white-space: nowrap; }
+      .top nav a:hover { color: var(--ink); background: color-mix(in oklab, var(--ink) 7%, transparent); }
+      @media (max-width: 640px) { .top nav a.opt { display: none; } }
+
+      /* Hero */
+      .hero { text-align: center; padding-top: 4rem; }
+      .eyebrow { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.85rem; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+      .eyebrow i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px rgb(34 197 94 / 0.2); }
+      h1 { margin: 1.2rem auto 0; max-width: 16ch; font-size: clamp(2.4rem, 6.5vw, 4.4rem); line-height: 1.02; letter-spacing: -0.04em; font-weight: 850; }
+      h1 em { font-style: normal; color: var(--accent); }
+      .lede { margin: 1.2rem auto 0; max-width: 40rem; color: var(--muted); font-size: 1.15rem; }
+      .cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.6rem; margin-top: 1.75rem; }
+      .btn { display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.7rem 1.2rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 700; text-decoration: none; transition: transform 0.15s, border-color 0.15s; }
+      .btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .btn svg { width: 1.05rem; height: 1.05rem; }
+
+      .stage { position: relative; margin: 3rem auto 0; max-width: 64rem; }
+      .stage::before { content: ""; position: absolute; inset: 10% 5% -5%; background: radial-gradient(closest-side, rgb(232 116 59 / 0.45), transparent); filter: blur(50px); opacity: 0.6; z-index: -1; }
+      .window { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #15110e; box-shadow: var(--shadow); }
+      .chrome { display: flex; align-items: center; gap: 0.4rem; height: 2.1rem; padding: 0 0.85rem; background: #1d1713; border-bottom: 1px solid #2e2620; }
+      .chrome i { width: 0.65rem; height: 0.65rem; border-radius: 50%; background: #3b312a; }
+      .chrome span { margin-left: 0.6rem; padding: 0.05rem 0.75rem; border-radius: 6px; background: #120e0b; color: #8f8074; font: 500 0.72rem/1.6 var(--mono); }
+      .window img { width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
+      .phone { position: absolute; right: -2rem; bottom: -3rem; width: 21%; min-width: 7rem; padding: 6px; border-radius: 28px; background: #0d0a08; border: 1px solid #3a3029; box-shadow: 0 30px 60px -20px rgb(0 0 0 / 0.7); }
+      .phone img { height: auto; border-radius: 22px; aspect-ratio: 390 / 844; object-fit: cover; object-position: top; }
+      @media (max-width: 760px) { .phone { right: 0.5rem; bottom: -2rem; width: 28%; } }
+
+      /* Sections */
+      section.wrap { padding-top: 5.5rem; }
+      .head { max-width: 44rem; margin-bottom: 2.25rem; }
+      .head.center { margin-inline: auto; text-align: center; }
+      .kicker { margin: 0 0 0.6rem; font: 700 0.75rem/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+      h2 { margin: 0; font-size: clamp(1.8rem, 3.6vw, 2.6rem); line-height: 1.08; letter-spacing: -0.03em; }
+      .head p { margin: 0.8rem 0 0; color: var(--muted); font-size: 1.05rem; }
+
+      /* Who's here */
+      .people { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.1fr); gap: 2.5rem; align-items: center; }
+      @media (max-width: 860px) { .people { grid-template-columns: minmax(0, 1fr); } }
+      .picker { display: grid; gap: 0.6rem; }
+      .person {
+        display: flex; align-items: center; gap: 0.9rem; width: 100%; padding: 0.8rem 1rem;
+        border-radius: 16px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+        font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, transform 0.15s;
+      }
+      .person:hover { transform: translateX(3px); }
+      .person[aria-pressed="true"] { border-color: var(--c); box-shadow: 0 0 0 3px color-mix(in oklab, var(--c) 22%, transparent); }
+      .person .av { display: grid; place-items: center; width: 2.8rem; height: 2.8rem; border-radius: 50%; font-size: 1.4rem; background: color-mix(in oklab, var(--c) 20%, transparent); border: 2px solid var(--c); flex: none; }
+      .person b { display: block; }
+      .person small { color: var(--muted); font-size: 0.85rem; }
+      .people .window img { transition: opacity 0.2s; }
+      .people .window img.swap { opacity: 0; }
+      .note { margin: 0.9rem 0 0; color: var(--muted); font-size: 0.9rem; text-align: center; }
+
+      /* Features */
+      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+      @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 620px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+      .card { padding: 1.4rem 1.4rem 1.2rem; border-radius: 18px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 2px rgb(0 0 0 / 0.03); }
+      .card .ico { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 12px; background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent); margin-bottom: 0.9rem; }
+      .card .ico svg { width: 1.3rem; height: 1.3rem; }
+      .card h3 { margin: 0 0 0.5rem; font-size: 1.1rem; letter-spacing: -0.01em; }
+      .card ul { margin: 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.93rem; display: grid; gap: 0.35rem; }
+      .card li b { color: var(--ink); font-weight: 650; }
+      .card li::marker { color: var(--accent); }
+
+      /* Tour */
+      .tour { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+      @media (max-width: 760px) { .tour { grid-template-columns: minmax(0, 1fr); } }
+      .tour figure { margin: 0; }
+      .tour figcaption { margin-top: 0.8rem; color: var(--muted); font-size: 0.92rem; }
+      .tour figcaption b { color: var(--ink); }
+      .tour .window { transition: transform 0.2s; }
+      .tour .window:hover { transform: translateY(-3px); }
+      .tour a.zoom { display: block; color: inherit; cursor: zoom-in; }
+      .stage .window img, .stage .phone img, .people .window img { cursor: zoom-in; }
+
+      /* Quick start */
+      .start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 2.5rem; align-items: start; }
+      @media (max-width: 860px) { .start { grid-template-columns: minmax(0, 1fr); } }
+      .code { position: relative; border-radius: 16px; background: #15110e; border: 1px solid #2e2620; box-shadow: var(--shadow); overflow: hidden; }
+      .code pre { margin: 0; padding: 2.6rem 1.3rem 1.2rem; overflow-x: auto; color: #f3ece6; font: 0.84rem/1.7 var(--mono); }
+      .code pre .c { color: #8f8074; }
+      .code button { position: absolute; top: 0.6rem; right: 0.6rem; padding: 0.3rem 0.7rem; border-radius: 8px; border: 1px solid #3a3029; background: #1d1713; color: #d8cbc0; font: 600 0.78rem/1.4 system-ui, sans-serif; cursor: pointer; }
+      .code button:hover { border-color: var(--accent); color: #fff; }
+      .steps { margin: 1.2rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.8rem; counter-reset: s; }
+      .steps li { position: relative; padding-left: 2.6rem; color: var(--muted); }
+      .steps li::before { counter-increment: s; content: counter(s); position: absolute; left: 0; top: -0.1rem; display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: 50%; background: color-mix(in oklab, var(--accent) 15%, transparent); color: var(--accent-ink); font-weight: 800; font-size: 0.85rem; }
+      .steps li b { color: var(--ink); }
+
+      /* Google */
+      .google { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1rem; }
+      @media (max-width: 860px) { .google { grid-template-columns: minmax(0, 1fr); } }
+      .google .card h3 { font-size: 1.2rem; }
+      .google .card p { margin: 0.6rem 0 0; color: var(--muted); }
+      .google .card p:first-of-type { margin-top: 0; }
+      .scopes { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.55rem; }
+      .scopes li { display: flex; gap: 0.6rem; color: var(--muted); }
+      .scopes li::before { content: "✓"; flex: none; display: grid; place-items: center; width: 1.35rem; height: 1.35rem; border-radius: 50%; background: rgb(34 197 94 / 0.15); color: #16a34a; font-size: 0.75rem; font-weight: 800; margin-top: 0.15rem; }
+      .scopes li.no::before { content: "✕"; background: rgb(239 68 68 / 0.12); color: #dc2626; }
+
+      footer { margin-top: 6rem; padding: 2.5rem 0 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+      footer.foot .wrap { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; justify-content: space-between; }
+      footer.foot nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+
+      /* Lightbox */
+      dialog { width: min(96vw, 100rem); max-height: 94vh; padding: 0; border: 0; background: transparent; overflow: visible; }
+      dialog::backdrop { background: rgb(10 7 5 / 0.88); backdrop-filter: blur(6px); }
+      #zoom img { margin: 0 auto; max-height: 86vh; width: auto; border-radius: 12px; box-shadow: 0 30px 80px rgb(0 0 0 / 0.7); }
+      #zoom p { margin: 0.8rem 0 0; text-align: center; color: #d8cbc0; }
+      #zoom button { position: fixed; top: 1rem; right: 1rem; width: 2.6rem; height: 2.6rem; border-radius: 50%; border: 1px solid #3a3029; background: #1d1713; color: #fff; font-size: 1.3rem; cursor: pointer; }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        .btn, .person, .tour .window, .people .window img { transition: none; }
+      }
+    </style>
   </head>
   <body>
+    <header class="top">
+      <div class="wrap">
+        <a class="logo" href="./">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <path fill="#e8743b" d="M16 3c1.2 4.3 6.8 7.3 7.9 12.6C25 21 21.4 28 16 28S7 21.7 8.2 16.4c.6-2.6 2.4-4.2 3.5-5.6.3 2.2 1.2 3.5 2.5 4.2C13.5 10.6 14.6 6.5 16 3Z" />
+            <path fill="#ffd48f" d="M16.4 15.5c.6 2.4 3.6 3.8 3.6 6.7 0 2.7-1.8 4.3-4 4.3s-4-1.6-4-4.1c0-1.9 1.3-3 2.1-3.8.2 1.2.7 1.8 1.4 2.2-.2-2 .2-3.8.9-5.3Z" />
+          </svg>
+          Hearth
+        </a>
+        <nav aria-label="On this page">
+          <a class="opt" href="#features">Features</a>
+          <a class="opt" href="#start">Install</a>
+          <a href="#google">Google Calendar</a>
+          <a href="https://github.com/mikedmor/hearth">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
     <main>
-      <header>
-        <svg viewBox="0 0 32 32" aria-hidden="true">
-          <path fill="#e8743b" d="M16 3c1.2 4.3 6.8 7.3 7.9 12.6C25 21 21.4 28 16 28S7 21.7 8.2 16.4c.6-2.6 2.4-4.2 3.5-5.6.3 2.2 1.2 3.5 2.5 4.2C13.5 10.6 14.6 6.5 16 3Z" />
-          <path fill="#ffd48f" d="M16.4 15.5c.6 2.4 3.6 3.8 3.6 6.7 0 2.7-1.8 4.3-4 4.3s-4-1.6-4-4.1c0-1.9 1.3-3 2.1-3.8.2 1.2.7 1.8 1.4 2.2-.2-2 .2-3.8.9-5.3Z" />
-        </svg>
-        <b>Hearth</b>
-      </header>
-
-      <h1>A home's own start page</h1>
-      <p>
-        Hearth runs on a home server, on the home's own network, for the people who live there.
-        It shows the home's services, a page for each person, and each person's calendar.
-      </p>
-
-      <div class="card">
-        <h2 style="margin-top: 0">Why this page exists</h2>
-        <p>
-          When someone in the home connects their Google Calendar to Hearth, Google asks for a
-          public page about the app and its privacy policy. This is that page. Hearth itself is
-          not on the internet and can't be reached from here.
+      <div class="wrap hero">
+        <span class="eyebrow"><i aria-hidden="true"></i> Self-hosted · open source · one container</span>
+        <h1>The front door to your <em>home network</em></h1>
+        <p class="lede">
+          A start page for the whole family. Every service in the house one tap away with a live status
+          dot, a page for each person, widgets for what the home runs, and everyone's own calendar.
+          Nothing leaves your network unless you decide it should.
         </p>
-        <p class="muted" style="margin-bottom: 0">
-          Signing in with Google brings you back through this site's
-          <a href="google/">return page</a>, which only sends your browser home to Hearth.
-        </p>
+        <div class="cta">
+          <a class="btn primary" href="#start">Install it</a>
+          <a class="btn" href="https://github.com/mikedmor/hearth">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            Code on GitHub
+          </a>
+        </div>
+        <div class="stage">
+          <div class="window">
+            <div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home</span></div>
+            <img src="shots/home.webp" width="1600" height="1000" alt="Hearth's start page for Alex: favourite services in a row, sections of services each with a green status dot, the week ahead from Alex's calendar, countdowns, clocks and a family note." />
+          </div>
+          <div class="phone">
+            <img src="shots/phone.webp" width="585" height="1266" alt="The same page on a phone, with favourites in a dock at the bottom." loading="lazy" />
+          </div>
+        </div>
       </div>
 
-      <p><a href="privacy.html">Privacy policy</a> · <a href="terms.html">Terms of service</a></p>
+      <section id="people" class="wrap" aria-labelledby="people-title">
+        <div class="head">
+          <p class="kicker">Who's here?</p>
+          <h2 id="people-title">One home, a page for everyone</h2>
+          <p>
+            Tap your face and the page is yours: your favourites, your widgets, your colours. A child's page
+            shows what's right for them, and a parent's can keep things to itself behind a PIN.
+          </p>
+        </div>
+        <div class="people">
+          <div class="picker">
+            <button class="person" type="button" aria-pressed="true" style="--c:#e8743b" data-shot="shots/home.webp" data-alt="Alex's page in the Ember theme, dark, with favourites, the week ahead and countdowns.">
+              <span class="av" aria-hidden="true">🦊</span>
+              <span><b>Alex</b><small>Adult · Ember theme · has a PIN</small></span>
+            </button>
+            <button class="person" type="button" aria-pressed="false" style="--c:#3b82f6" data-shot="shots/sam.webp" data-alt="Sam's page in the light Ocean theme, with photos, recipes and files as favourites.">
+              <span class="av" aria-hidden="true">🐻</span>
+              <span><b>Sam</b><small>Adult · Ocean theme</small></span>
+            </button>
+            <button class="person" type="button" aria-pressed="false" style="--c:#c026d3" data-shot="shots/riley.webp" data-alt="Riley's page in the pink Candy theme: Minecraft, Plex and the arcade as favourites, a birthday countdown, and no network settings.">
+              <span class="av" aria-hidden="true">🦄</span>
+              <span><b>Riley</b><small>Child · Candy theme · set up by a parent</small></span>
+            </button>
+            <button class="person" type="button" aria-pressed="false" style="--c:#78716c" data-shot="shots/picker.webp" data-alt="The Who's here screen: four faces to choose from, and a Guest button.">
+              <span class="av" aria-hidden="true">👋</span>
+              <span><b>Who's here?</b><small>What a new device sees first</small></span>
+            </button>
+          </div>
+          <div>
+            <div class="window">
+              <div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home</span></div>
+              <img id="person-shot" src="shots/home.webp" width="1600" height="1000" alt="Alex's page in the Ember theme, dark, with favourites, the week ahead and countdowns." loading="lazy" />
+            </div>
+            <p class="note">Real screenshots of Hearth, with a made-up family.</p>
+          </div>
+        </div>
+      </section>
 
-      <footer>Hearth is run by the household that uses it. This site has no tracking and no cookies.</footer>
+      <section id="features" class="wrap" aria-labelledby="features-title">
+        <div class="head center">
+          <p class="kicker">Features</p>
+          <h2 id="features-title">Everything the house runs, in one place</h2>
+          <p>Plain files on your own hardware. No account with anyone, no telemetry.</p>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><circle cx="17.5" cy="17.5" r="3.5"/></svg></span>
+            <h3>The start page</h3>
+            <ul>
+              <li><b>Sections and links</b> with over 7,000 bundled logos, symbols and emoji</li>
+              <li><b>Live status</b> for every service, checked every 30 seconds</li>
+              <li><b>Find services:</b> scan the network; about 100 apps recognised</li>
+              <li><b>Ctrl+K</b> to search and jump, and short links like <code>start.home/plex</code></li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5"/></svg></span>
+            <h3>Everyone's own page</h3>
+            <ul>
+              <li><b>Who's here?</b> Tap your face; a PIN keeps a page private</li>
+              <li><b>Roles:</b> the admin, adults and children, each seeing what's meant for them</li>
+              <li><b>Your look:</b> themes, layouts, backgrounds, fonts, even your own CSS</li>
+              <li><b>A set-up link</b> that opens one person's page on a shared tablet</li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 10h18M10 10v11"/></svg></span>
+            <h3>Widgets</h3>
+            <ul>
+              <li><b>Built in:</b> service health, a family note, countdowns, clocks, your agenda</li>
+              <li><b>Ready-made</b> for Plex, Jellyfin, Radarr, Pi-hole, Portainer, Nextcloud, Frigate and more</li>
+              <li><b>Your own</b> from JSON, XML, RSS or WebSocket data</li>
+              <li><b>Live:</b> one connection per page, updated as the data changes</li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg></span>
+            <h3>Calendar</h3>
+            <ul>
+              <li><b>Everyone gets one</b>, as a month, a week or a list, and a widget for the page</li>
+              <li><b>Add sources:</b> Hearth's own, calendar links (<code>.ics</code>), CalDAV, and Google both ways</li>
+              <li><b>Share</b> a whole calendar, or tag people on one event</li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 10h4v4h-4z"/></svg></span>
+            <h3>AI, on your own server</h3>
+            <ul>
+              <li><b>Any Ollama or OpenAI-compatible server</b> on your network</li>
+              <li><b>Chat</b> for the roles you allow, with children's answers kept simple and safe</li>
+              <li><b>An AI designer</b> that drafts a widget from a sentence and fixes it until it works</li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="ico"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v5.5c0 4.6 3.1 8.2 7.5 9.5 4.4-1.3 7.5-4.9 7.5-9.5V6Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+            <h3>Private and safe</h3>
+            <ul>
+              <li><b>Plain files</b> in one data folder: back it up with the rest of your NAS</li>
+              <li><b>Secrets encrypted</b> with AES-256-GCM; passwords and PINs hashed</li>
+              <li><b>Nothing private for visitors:</b> guests see only what's meant for everyone</li>
+              <li><b>No outbound calls</b> unless you allow them, each one documented</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="tour" class="wrap" aria-labelledby="tour-title">
+        <div class="head">
+          <p class="kicker">A closer look</p>
+          <h2 id="tour-title">Made to be changed by the people who use it</h2>
+          <p>Click any picture to see it full size.</p>
+        </div>
+        <div class="tour">
+          <figure>
+            <a class="zoom" href="shots/calendar.webp"><div class="window"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home/calendar</span></div><img src="shots/calendar.webp" width="1600" height="1000" alt="The calendar's month view: a shared family calendar in orange and a work calendar in blue." loading="lazy" /></div></a>
+            <figcaption><b>The month at a glance.</b> A family calendar everyone can add to, and a work one only Alex sees.</figcaption>
+          </figure>
+          <figure>
+            <a class="zoom" href="shots/week.webp"><div class="window"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home/calendar</span></div><img src="shots/week.webp" width="1600" height="1000" alt="The calendar's week view, with today's column highlighted and a line at the current time." loading="lazy" /></div></a>
+            <figcaption><b>Or the week, hour by hour.</b> Soccer practice, the dentist and pizza night, where they belong.</figcaption>
+          </figure>
+          <figure>
+            <a class="zoom" href="shots/edit.webp"><div class="window"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home</span></div><img src="shots/edit.webp" width="1600" height="1000" alt="Edit mode: drag handles on every section and link, stars to pick favourites, and buttons to add links, sections and widgets." loading="lazy" /></div></a>
+            <figcaption><b>Edit in place.</b> Press Edit, then drag sections and links, star favourites, and choose who sees what.</figcaption>
+          </figure>
+          <figure>
+            <a class="zoom" href="shots/search.webp"><div class="window"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>start.home</span></div><img src="shots/search.webp" width="1600" height="1000" alt="Search open with 'jelly' typed and Jellyfin as the result." loading="lazy" /></div></a>
+            <figcaption><b>Search and jump.</b> Ctrl+K, a few letters, Enter. Favourites are on the number keys.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="start" class="wrap" aria-labelledby="start-title">
+        <div class="start">
+          <div>
+            <p class="kicker">Install</p>
+            <h2 id="start-title">One container, a few commands</h2>
+            <ol class="steps">
+              <li>You need <b>Docker</b> on any amd64 or arm64 machine, such as a NAS or a small home server.</li>
+              <li>Run the commands, then open <b>http://localhost:8082</b>.</li>
+              <li>The first visit asks for the <b>setup code</b> from <code>docker logs hearth</code>, then the admin password you choose.</li>
+              <li>Keep a copy of <b>.env</b> somewhere safe. Its key encrypts widget keys and calendar sign-ins.</li>
+            </ol>
+            <div class="cta" style="justify-content: flex-start">
+              <a class="btn" href="https://github.com/mikedmor/hearth/blob/main/guides/install.md">Install guide (Synology too)</a>
+            </div>
+          </div>
+          <div class="code">
+            <button type="button" id="copy">Copy</button>
+<pre id="cmds"><span class="c"># a folder for Hearth and its data</span>
+mkdir -p hearth/data &amp;&amp; cd hearth
+git clone https://github.com/mikedmor/hearth.git src
+cp src/docker/compose.yaml .
+
+<span class="c"># the key that encrypts its secrets</span>
+umask 077; printf "HEARTH_SECRET_KEY=%s\n" "$(openssl rand -base64 32)" &gt; .env
+
+docker compose up -d --build</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="google" class="wrap" aria-labelledby="google-title">
+        <div class="head">
+          <p class="kicker">Google Calendar</p>
+          <h2 id="google-title">How Hearth uses Google Calendar</h2>
+          <p>
+            When someone in a home connects their Google Calendar to Hearth, Google asks for a public page about
+            the app and its privacy policy. This is that page. Hearth itself runs on the home's own server and
+            can't be reached from here.
+          </p>
+        </div>
+        <div class="google">
+          <div class="card">
+            <h3>What Hearth asks Google for</h3>
+            <ul class="scopes">
+              <li>See the list of your calendars, and the events in the ones you choose to show.</li>
+              <li>Add, change and delete events, only when you do so in Hearth.</li>
+              <li class="no">Not your email, contacts, files or anything else, and never events from calendars you didn't choose.</li>
+            </ul>
+            <p style="margin-top: 1rem">
+              Google's permission is stored encrypted on the home server and never shown on a page. Events are
+              fetched when you look at your calendar and aren't copied anywhere else. You can disconnect at any time
+              in Hearth, or at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+            </p>
+          </div>
+          <div class="card">
+            <h3>This website</h3>
+            <p>
+              Signing in with Google brings you back through this site's <a href="google/">return page</a>, which
+              only sends your browser home to Hearth on your own network. The one-time code it passes along is
+              useless without secrets only the home server has.
+            </p>
+            <p>This site has no tracking, analytics, cookies, forms or outside scripts.</p>
+            <p>
+              Hearth's use of information received from Google APIs adheres to the
+              <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+              including the Limited Use requirements.
+            </p>
+            <p><a href="privacy.html">Privacy policy</a> · <a href="terms.html">Terms of service</a></p>
+          </div>
+        </div>
+      </section>
     </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <span>Hearth is free and open source (AGPL-3.0), and run by the household that uses it.</span>
+        <nav aria-label="More">
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html">Terms</a>
+          <a href="https://github.com/mikedmor/hearth">GitHub</a>
+          <a href="https://github.com/mikedmor/hearth/blob/main/guides/README.md">Guides</a>
+        </nav>
+      </div>
+    </footer>
+
+    <dialog id="zoom" aria-label="Screenshot">
+      <img alt="" />
+      <p></p>
+      <button type="button" aria-label="Close">×</button>
+    </dialog>
+
+    <script>
+      // Everything here is optional: without it, each picture is a plain link to the full size.
+      (() => {
+        const shot = document.getElementById("person-shot");
+        const people = document.querySelectorAll(".person");
+        const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        for (const p of people)
+          p.addEventListener("click", () => {
+            for (const q of people) q.setAttribute("aria-pressed", String(q === p));
+            shot.classList.add("swap");
+            setTimeout(() => {
+              shot.src = p.dataset.shot;
+              shot.alt = p.dataset.alt;
+              if (shot.complete) shot.classList.remove("swap");
+              else shot.onload = () => shot.classList.remove("swap");
+            }, still ? 0 : 160);
+          });
+
+        const zoom = document.getElementById("zoom");
+        const show = (src, text) => {
+          zoom.querySelector("img").src = src;
+          zoom.querySelector("img").alt = text;
+          zoom.querySelector("p").textContent = text;
+          zoom.showModal();
+        };
+        for (const a of document.querySelectorAll("a.zoom"))
+          a.addEventListener("click", (e) => {
+            e.preventDefault();
+            show(a.getAttribute("href"), a.closest("figure").querySelector("figcaption").textContent);
+          });
+        for (const img of document.querySelectorAll(".stage img, .people .window img"))
+          img.addEventListener("click", () => show(img.src, img.alt));
+        zoom.addEventListener("click", (e) => {
+          if (e.target === zoom || e.target.tagName === "BUTTON") zoom.close();
+        });
+
+        const copy = document.getElementById("copy");
+        copy.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(document.getElementById("cmds").textContent);
+            copy.textContent = "Copied";
+          } catch {
+            copy.textContent = "Select and copy";
+          }
+          setTimeout(() => (copy.textContent = "Copy"), 1800);
+        });
+      })();
+    </script>
   </body>
 </html>
