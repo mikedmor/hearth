@@ -13,7 +13,7 @@ Self-hosted in one container. Nothing leaves your network unless you decide it s
 [![Release](https://img.shields.io/github/v/release/mikedmor/hearth?label=release)](https://github.com/mikedmor/hearth/releases)
 [![Docker image](https://img.shields.io/badge/ghcr.io-mikedmor%2Fhearth-2496ED?logo=docker&logoColor=white)](https://github.com/mikedmor/hearth/pkgs/container/hearth)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Support development](https://img.shields.io/badge/support-PayPal-00457C?logo=paypal&logoColor=white)](https://www.paypal.com/paypalme/mikedmor)
+[![Support development](https://img.shields.io/badge/support-PayPal-00457C?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=HGMY3TA5T7NDQ)
 
 [Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [Documentation](guides/README.md) · [Changelog](CHANGELOG.md) · [Support](#support-the-project)
 
@@ -184,7 +184,7 @@ Bug reports, ideas and pull requests are welcome. An easy place to start is teac
 Hearth is free and open source, built and maintained in spare time. If it's useful to you, consider supporting its development:
 
 <p align="center">
-  <a href="https://www.paypal.com/paypalme/mikedmor"><img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal" /></a>
+  <a href="https://www.paypal.com/donate/?hosted_button_id=HGMY3TA5T7NDQ"><img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal" /></a>
 </p>
 
 Stars, bug reports in [GitHub issues](https://github.com/mikedmor/hearth/issues) and sharing Hearth with friends help too.

@@ -34,4 +34,4 @@ Everything you need to install, set up and use Hearth. New here? Start with **[I
 
 ---
 
-Something missing or wrong? [Open an issue](https://github.com/mikedmor/hearth/issues). Hearth is free and open source; if it's useful to you, you can [support its development](https://www.paypal.com/paypalme/mikedmor).
+Something missing or wrong? [Open an issue](https://github.com/mikedmor/hearth/issues). Hearth is free and open source; if it's useful to you, you can [support its development](https://www.paypal.com/donate/?hosted_button_id=HGMY3TA5T7NDQ).
