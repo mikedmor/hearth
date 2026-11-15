@@ -11,7 +11,8 @@ without signing everyone out every 7 days (see [Calendar](../guides/calendar.md#
 - `google/`: the return page. After "Sign in with Google" in Hearth, Google sends the browser
   here. The page sends it straight home, to Hearth's `/calendar`, which finishes the sign-in.
 
-It has no tracking, cookies or outside scripts. The return page only ever forwards to an address
+It has no cookies. Its one outside script is GoatCounter, which counts visits anonymously on every
+page except the return page. The return page only ever forwards to an address
 on a home network. The code it passes along is useless without Hearth's client secret and the
 one-time PKCE key, which never leave the home server. Nothing at home is opened to the internet.
 
