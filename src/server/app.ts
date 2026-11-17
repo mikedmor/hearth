@@ -698,6 +698,33 @@ export function createApp(deps: AppDeps): Hono {
     });
   });
 
+  /**
+   * The widgets the Android app can put on a phone's home screen: those on this person's page
+   * (app-shell's widget contract). Each one's `page` is drawn off screen into a picture. Not
+   * Ask (it's for typing in) or the clock (a picture of it would be wrong a minute later).
+   */
+  app.get("/api/app-widgets", (c) => {
+    const w = who(c);
+    const view = buildHomeView(cfg(), {
+      profile: w.profile,
+      session: w.session,
+      hasPin: (id) => deps.auth.hasPin(id),
+    });
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      widgets: view.widgets
+        .filter((x) => x.type !== "ask" && x.type !== "clock")
+        .map((x) => ({
+          id: x.id,
+          title: x.title ?? APP_WIDGET_TITLES[x.type],
+          description: x.title ? APP_WIDGET_TITLES[x.type] : "",
+          page: `/app-widget/${encodeURIComponent(x.id)}`,
+          open: x.type === "agenda" ? "/calendar" : "/",
+          refresh: 30,
+        })),
+    });
+  });
+
   /** This person's own CSS, as a stylesheet (CSP keeps it from loading anything from outside). */
   app.get("/api/look.css", (c) => {
     const w = who(c);
@@ -2325,6 +2352,8 @@ export function createApp(deps: AppDeps): Hono {
       "/settings/*",
       "/setup",
       "/admin",
+      // A home-screen widget in the Android app (see /api/app-widgets).
+      "/app-widget/*",
     ])
       app.get(route, page);
   } else {
@@ -2485,3 +2514,14 @@ async function readSafe(
 }
 
 export { visibleWidgets };
+
+/** What each kind of widget is called when it has no title of its own (as on the page). */
+const APP_WIDGET_TITLES: Record<string, string> = {
+  status: "Services",
+  note: "Note",
+  countdown: "Coming up",
+  ai: "AI servers",
+  pinball: "Pinball",
+  agenda: "Calendar",
+  custom: "Widget",
+};

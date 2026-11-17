@@ -1196,3 +1196,18 @@ describe("services added by hand", () => {
     expect(after.items.some((i) => i.app === "prusalink")).toBe(false);
   });
 });
+
+describe("home-screen widgets for the Android app", () => {
+  it("lists the widgets on this person's page, each with a page to draw", async () => {
+    const { req } = await makeApp();
+    type List = { widgets: { id: string; title: string; page: string; open: string }[] };
+    const guest = (await (await req("GET", "/api/app-widgets")).json()) as List;
+    expect(guest.widgets).toEqual([
+      expect.objectContaining({ id: "note", title: "Note", page: "/app-widget/note", open: "/" }),
+    ]);
+    // A child's page: the admin-only widget on it isn't theirs to see.
+    expect((await req("POST", "/api/profile", { id: "kid" })).status).toBe(200);
+    const kid = (await (await req("GET", "/api/app-widgets")).json()) as List;
+    expect(kid.widgets.map((w) => w.id)).toEqual(["note"]);
+  });
+});

@@ -88,3 +88,16 @@ With an [AI server](ai.md) set up, the editor's **AI designer** tab drafts a wid
 ## What widgets may reach
 
 Widget sources reach **only the home network** unless the admin turns on **Settings → General → Network → Let widgets reach the internet**. Every redirect is checked again, and answers are limited in size and time. A source starts when the first page shows its widget and stops a minute after the last one closes.
+
+## On your phone's home screen
+
+The Hearth app for Android (coming soon) puts widgets on the phone's home screen. Long-press the home screen, choose **Widgets**, add **Hearth** and pick one of the widgets on your page. Ask and the clock aren't offered: one is for typing, and a picture of the other would be wrong a minute later.
+
+| What it does           | How                                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Stays up to date**   | Every half hour, when you leave the app, and when a notification arrives                                                   |
+| **Fits its space**     | Laid out at the widget's width and stretched to its height; when it's small, the last rows of a list go first               |
+| **Opens Hearth**       | Tap it (the calendar widget opens the calendar)                                                                             |
+| **Shows your page's**  | The widgets of the person signed in on the app, in their look                                                               |
+
+It's a picture of the widget, redrawn by the app, so it can't be scrolled or typed in.

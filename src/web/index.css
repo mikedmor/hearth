@@ -607,3 +607,21 @@ h3,
   width: 56%;
   height: 56%;
 }
+
+/* Home-screen widgets in the Android app (pages/AppWidgetPage): the widget fills the window over
+   a transparent page, and parts are dropped (data-widget-optional, then list rows) to fit. */
+html.app-widget,
+html.app-widget body {
+  background: transparent;
+}
+.app-widget-fill {
+  display: flex;
+  flex-direction: column;
+}
+.app-widget-fill > * {
+  flex: 1 1 auto;
+}
+.app-widget-fill [data-widget-hide],
+.app-widget-fill [data-widget-hidden] {
+  display: none;
+}

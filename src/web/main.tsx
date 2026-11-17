@@ -7,6 +7,7 @@ import { router } from "./App";
 import { ToastProvider } from "./components/ui";
 import { api } from "./lib/api";
 import { applyCachedLook } from "./lib/look";
+import { AppWidgetPage, appWidgetId } from "./pages/AppWidgetPage";
 
 applyCachedLook();
 
@@ -24,6 +25,9 @@ if (asked !== null) {
   await api.post("/api/profile", { id: asked || null }).catch(() => {});
 }
 
+// A home-screen widget in the Android app: just the widget, none of the page around it.
+const widgetId = appWidgetId(location.pathname);
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: true } },
 });
@@ -32,7 +36,7 @@ createRoot(document.getElementById("app") as HTMLElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <RouterProvider router={router} />
+        {widgetId !== null ? <AppWidgetPage id={widgetId} /> : <RouterProvider router={router} />}
       </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,

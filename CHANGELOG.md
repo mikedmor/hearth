@@ -4,6 +4,10 @@ All notable changes to Hearth are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- **On your phone's home screen.** In the Hearth app for Android (coming soon), any widget on your page can be a home-screen widget: long-press the home screen, add **Hearth**, and pick one. It keeps itself up to date, fits itself to the size you give it, and opens Hearth when you tap it. See [Widgets](guides/widgets.md#on-your-phones-home-screen).
+
 ## [1.0.0] - 2026-11-11
 
 The first release: a start page for the whole family.
