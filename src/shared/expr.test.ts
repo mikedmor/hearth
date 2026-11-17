@@ -109,3 +109,21 @@ describe("functions for app widgets", () => {
     expect(ev("wmoIcon(63)")).toBe("🌧️");
   });
 });
+
+describe("days from weather services", () => {
+  // A home in New York: a day on its own ("2026-11-17") is that day, not UTC midnight (the day
+  // before there).
+  const ny = (src: string) =>
+    run(src, { vars: {}, locale: "en-US", timeZone: "America/New_York", now: () => 0 });
+  it("names the day and the date of a date with no time", () => {
+    expect(ny('weekday("2026-11-17")')).toBe("Tue");
+    expect(ny('date("2026-11-17")')).toBe("Nov 17");
+  });
+  it("still reads full times in the home's zone", () => {
+    expect(ny('weekday("2026-11-17T02:00:00Z")')).toBe("Mon");
+  });
+  it("says a weather code in words alone", () => {
+    expect(ny("wmoText(1)")).toBe("Mainly clear");
+    expect(ny("wmoIcon(0)")).toBe("☀️");
+  });
+});

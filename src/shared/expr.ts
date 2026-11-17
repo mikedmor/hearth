@@ -435,6 +435,9 @@ const fmtNumber = (x: number, digits: number, r: Run) =>
     minimumFractionDigits: 0,
   }).format(x);
 
+/** A date with no time ("2026-11-17", as weather services give days): that day, not UTC midnight. */
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 const toTime = (v: unknown): number | null => {
   if (typeof v === "number") return v < 1e12 ? v * 1000 : v; // seconds or ms
   if (typeof v === "string" && v) {
@@ -712,7 +715,8 @@ export const FUNCTIONS: Record<string, Fn> = {
         : new Date(at).toLocaleDateString(r.ctx.locale ?? "en-US", {
             month: "short",
             day: "numeric",
-            timeZone: r.ctx.timeZone,
+            // A day on its own is that day wherever the home is.
+            timeZone: typeof t === "string" && DAY_ONLY.test(t) ? "UTC" : r.ctx.timeZone,
           });
     },
   },
@@ -757,6 +761,19 @@ export const FUNCTIONS: Record<string, Fn> = {
       }
     },
   },
+  weekday: {
+    args: "time",
+    doc: "The day of the week: Tue.",
+    run: ([t], r) => {
+      const at = toTime(t);
+      return at === null
+        ? "—"
+        : new Date(at).toLocaleDateString(r.ctx.locale ?? "en-US", {
+            weekday: "short",
+            timeZone: typeof t === "string" && DAY_ONLY.test(t) ? "UTC" : r.ctx.timeZone,
+          });
+    },
+  },
   wmo: {
     args: "code",
     doc: "A weather code (WMO, as Open-Meteo gives it) in words, with an emoji: ☀️ Clear.",
@@ -769,6 +786,11 @@ export const FUNCTIONS: Record<string, Fn> = {
     args: "code",
     doc: "A weather code's emoji.",
     run: ([c]) => weather(num(c))[0],
+  },
+  wmoText: {
+    args: "code",
+    doc: "A weather code in words, without the emoji: Clear.",
+    run: ([c]) => weather(num(c))[1],
   },
 };
 

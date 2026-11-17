@@ -276,6 +276,25 @@ export const BlockSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     ...blockBase,
+    kind: z.literal("forecast"),
+    /** Now: the temperature (a number), an emoji for it, and the conditions in words. */
+    value: formula,
+    nowIcon: formula.optional(),
+    label: template.optional(),
+    unit: z.string().max(20).optional(),
+    /** A line under it ("Warmer than yesterday"), and where it is. */
+    sub: template.optional(),
+    place: template.optional(),
+    /** The coming days, a row each: formulas over `$item` (and `$index`). */
+    items: formula,
+    itemTitle: formula,
+    itemIcon: formula.optional(),
+    itemHigh: formula.optional(),
+    itemLow: formula.optional(),
+    limit: z.number().int().min(1).max(10).default(4),
+  }),
+  z.object({
+    ...blockBase,
     kind: z.literal("table"),
     rows: formula,
     columns: z
@@ -352,9 +371,12 @@ const FORMULA_KEYS = [
   "itemTone",
   "itemLabel",
   "itemState",
+  "itemHigh",
+  "itemLow",
+  "nowIcon",
   "display",
 ];
-const TEMPLATE_KEYS = ["text", "label", "sub", "detail", "src", "center"];
+const TEMPLATE_KEYS = ["text", "label", "sub", "detail", "src", "center", "place"];
 
 export interface DocIssue {
   path: string;
@@ -480,6 +502,16 @@ export type ResolvedBlock = {
       items: { title: string; detail?: string; value?: string; icon?: string; tone: Tone }[];
       empty?: string;
     }
+  | {
+      kind: "forecast";
+      value: string;
+      icon?: string;
+      label?: string;
+      unit?: string;
+      sub?: string;
+      place?: string;
+      days: { title: string; icon?: string; high?: string; low?: string }[];
+    }
   | { kind: "table"; columns: { label: string; align: "left" | "right" }[]; rows: string[][] }
   | {
       kind: "lights";
@@ -527,6 +559,8 @@ export const BLOCK_HELP: Record<BlockKind, string> = {
   lights:
     'Status lights: items, itemLabel, itemState ("up", "down", "warn", "off" or true/false), itemDetail.',
   pairs: "Label and value pairs: items [{label, value (template)}].",
+  forecast:
+    'Weather: now on the left (value: the temperature, nowIcon: an emoji, label: the conditions, unit, sub: a line like "Warmer than yesterday", place) and the coming days on the right: items (a list), itemTitle (weekday($item)), itemIcon, itemHigh, itemLow; formulas over $item and $index.',
   image:
     "A picture from the home network (a camera snapshot): src (template), every (seconds), fit, height.",
   divider: "A line between sections.",

@@ -7,6 +7,11 @@ All notable changes to Hearth are listed here. Versions follow [Semantic Version
 ### Added
 
 - **On your phone's home screen.** In the Hearth app for Android (coming soon), any widget on your page can be a home-screen widget: long-press the home screen, add **Hearth**, and pick one. It keeps itself up to date, fits itself to the size you give it, and opens Hearth when you tap it. See [Widgets](guides/widgets.md#on-your-phones-home-screen).
+- **A new look for the Weather widget:** now on the left (a big icon, the temperature, the conditions, whether it's warmer or cooler than yesterday, and the place) and the next days on the right, each with its icon, high and low. It sits in one column on a narrow widget. Add it again from the gallery to get the new look, with a **Place name** if you like. Custom widgets can use the same layout: the new **Weather forecast** block, and `weekday()` and `wmoText()` in formulas.
+
+### Fixed
+
+- In widgets, a date with no time (as weather services give days) no longer shows as the day before in time zones west of UTC.
 
 ## [1.0.0] - 2026-11-11
 

@@ -205,6 +205,30 @@ function resolveBlock(b: Block, ctx: ExprContext): ResolvedBlock {
       });
       return { ...common, kind: "list", tone: toneOf(b.tone, ctx), items: rows, empty: b.empty };
     }
+    case "forecast": {
+      const days = items(b.items, ctx, b.limit).map((item, i) => {
+        const c = each(ctx, item, i);
+        const opt = (src?: string) => (src ? display(run(src, c), ctx) : undefined);
+        return {
+          title: display(run(b.itemTitle, c), ctx),
+          icon: opt(b.itemIcon),
+          high: opt(b.itemHigh),
+          low: opt(b.itemLow),
+        };
+      });
+      return {
+        ...common,
+        kind: "forecast",
+        tone: toneOf(b.tone, ctx),
+        value: display(run(b.value, ctx), ctx),
+        icon: b.nowIcon ? display(run(b.nowIcon, ctx), ctx) : undefined,
+        label: tmpl(b.label, ctx),
+        unit: b.unit,
+        sub: tmpl(b.sub, ctx),
+        place: tmpl(b.place, ctx),
+        days,
+      };
+    }
     case "table": {
       const rows = items(b.rows, ctx, b.limit).map((item, i) => {
         const c = each(ctx, item, i);

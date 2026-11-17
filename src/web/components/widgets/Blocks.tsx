@@ -1,5 +1,5 @@
 /** Draws a custom widget's blocks. Everything arrives worked out; this only paints it. */
-import { CameraOff } from "lucide-react";
+import { CameraOff, MapPin } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ResolvedBlock, Tone } from "../../../shared/widget-doc";
 import { cx } from "../../lib/format";
@@ -227,6 +227,55 @@ export function BlockView({ b }: { b: ResolvedBlock }) {
             </li>
           ))}
         </ul>
+      );
+    case "forecast":
+      // Now on the left, the coming days on the right; one under the other when it's narrow.
+      return (
+        <div className="flex flex-wrap gap-x-6 gap-y-4">
+          <div className="flex min-w-[9rem] grow basis-36 flex-col justify-between gap-3">
+            {b.icon ? (
+              <span className="text-[56px] leading-none" aria-hidden="true">
+                {b.icon}
+              </span>
+            ) : null}
+            <div className="grid gap-1">
+              <span
+                className={cx(
+                  "font-heading text-[44px] font-bold leading-none tracking-tight tabular-nums",
+                  TONE_TEXT[b.tone],
+                )}
+              >
+                {b.value}
+                {b.unit ? <span className="font-semibold">{b.unit}</span> : null}
+              </span>
+              {b.label ? <span className="text-[15px] font-semibold">{b.label}</span> : null}
+              {b.sub ? <span className="text-[13.5px] text-muted">{b.sub}</span> : null}
+              {b.place ? (
+                <span className="flex items-center gap-1 text-[13.5px] text-muted">
+                  <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{b.place}</span>
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <ul className="grid min-w-[11rem] grow-[1.4] basis-48 content-center divide-y divide-line">
+            {b.days.map((d, n) => (
+              <li
+                key={`${d.title}-${n}`}
+                className="grid grid-cols-[3.2rem_2rem_1fr] items-center gap-2 py-2 first:pt-0 last:pb-0"
+              >
+                <span className="text-[14.5px] font-medium text-muted">{d.title}</span>
+                <span className="text-center text-xl" aria-hidden="true">
+                  {d.icon}
+                </span>
+                <span className="text-right text-[14.5px] font-semibold tabular-nums">
+                  {d.high}
+                  {d.low ? <span className="ml-2 font-normal text-muted">{d.low}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       );
     case "table":
       return (

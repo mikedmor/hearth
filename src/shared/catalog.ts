@@ -2519,6 +2519,12 @@ export const GENERAL_TEMPLATES: GeneralTemplate[] = [
       { key: "lat", label: "Latitude", hint: "Like 40.71", default: "" },
       { key: "lon", label: "Longitude", hint: "Like -74.01", default: "" },
       { key: "unit", label: "Units", hint: "celsius or fahrenheit", default: "celsius" },
+      {
+        key: "place",
+        label: "Place name",
+        hint: "Shown under the temperature, like Springfield",
+        default: "",
+      },
     ],
     doc: {
       v: 1,
@@ -2526,30 +2532,28 @@ export const GENERAL_TEMPLATES: GeneralTemplate[] = [
         {
           id: "w",
           kind: "http",
-          url: "https://api.open-meteo.com/v1/forecast?latitude={{param:lat}}&longitude={{param:lon}}&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=4&timezone=auto&temperature_unit={{param:unit}}",
+          // Yesterday too (past_days=1), to say whether today is warmer: the days are
+          // [yesterday, today, tomorrow, …].
+          url: "https://api.open-meteo.com/v1/forecast?latitude={{param:lat}}&longitude={{param:lon}}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&past_days=1&forecast_days=4&timezone=auto&temperature_unit={{param:unit}}",
           every: 900,
         },
       ],
       blocks: [
         {
-          id: "now",
-          kind: "stat",
+          id: "weather",
+          kind: "forecast",
           w: 12,
-          label: "{{ wmo($w.current.weather_code) }}",
           value: "round($w.current.temperature_2m)",
           unit: "°",
-          sub: "Wind {{ round($w.current.wind_speed_10m) }} km/h · Humidity {{ $w.current.relative_humidity_2m }}%",
-          size: "lg",
-        },
-        {
-          id: "days",
-          kind: "list",
-          w: 12,
-          items: "take($w.daily.time, -3)",
+          nowIcon: "wmoIcon($w.current.weather_code)",
+          label: "{{ wmoText($w.current.weather_code) }}",
+          sub: '{{ $w.daily.temperature_2m_max[1] > $w.daily.temperature_2m_max[0] + 1.5 ? "Warmer than yesterday" : $w.daily.temperature_2m_max[1] < $w.daily.temperature_2m_max[0] - 1.5 ? "Cooler than yesterday" : "About the same as yesterday" }}',
+          place: "{{param:place}}",
+          items: "take($w.daily.time, -4)",
+          itemTitle: '$index == 0 ? "Today" : weekday($item)',
           itemIcon: "wmoIcon($w.daily.weather_code[$index + 1])",
-          itemTitle: "date($item)",
-          itemValue:
-            'round($w.daily.temperature_2m_max[$index + 1]) + "° / " + round($w.daily.temperature_2m_min[$index + 1]) + "°"',
+          itemHigh: 'round($w.daily.temperature_2m_max[$index + 1]) + "°"',
+          itemLow: 'round($w.daily.temperature_2m_min[$index + 1]) + "°"',
         },
       ],
     },

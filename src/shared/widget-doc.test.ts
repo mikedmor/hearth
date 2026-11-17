@@ -242,3 +242,46 @@ describe("charts from Muny's card kit", () => {
     expect(issues.map((i) => i.path)).toContain("blocks.0.series.0.value");
   });
 });
+
+describe("the forecast block", () => {
+  it("works out now and each coming day from Open-Meteo's shape", async () => {
+    const { GENERAL_TEMPLATES } = await import("./catalog");
+    const template = GENERAL_TEMPLATES.find((t) => t.id === "weather");
+    const filled = JSON.parse(
+      JSON.stringify(template?.doc)
+        .replaceAll("{{param:place}}", "Springfield")
+        .replaceAll(/\{\{param:\w+\}\}/g, "1"),
+    );
+    const { doc, issues } = checkDoc(filled);
+    expect(issues).toEqual([]);
+    const [b] = resolveDoc(doc as NonNullable<typeof doc>, {
+      sources: {
+        w: {
+          current: { temperature_2m: 47.6, weather_code: 1 },
+          daily: {
+            time: ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"],
+            temperature_2m_max: [55, 63, 65, 67, 68],
+            temperature_2m_min: [30, 34, 33, 38, 38],
+            weather_code: [3, 0, 2, 1, 61],
+          },
+        },
+      },
+      history: {},
+    });
+    expect(b).toMatchObject({
+      kind: "forecast",
+      value: "48",
+      unit: "°",
+      icon: "🌤️",
+      label: "Mainly clear",
+      sub: "Warmer than yesterday",
+      place: "Springfield",
+    });
+    expect(b?.kind === "forecast" && b.days).toEqual([
+      { title: "Today", icon: "☀️", high: "63°", low: "34°" },
+      { title: "Wed", icon: "⛅", high: "65°", low: "33°" },
+      { title: "Thu", icon: "🌤️", high: "67°", low: "38°" },
+      { title: "Fri", icon: "🌧️", high: "68°", low: "38°" },
+    ]);
+  });
+});
