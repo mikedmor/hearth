@@ -6,7 +6,7 @@
     <title>Hearth · A start page for the whole family</title>
     <meta
       name="description"
-      content="Hearth is a self-hosted start page for a home network: every service one tap away with live status, a page for each person, widgets, and everyone's own calendar. This site also explains how Hearth uses Google Calendar."
+      content="Hearth is a self-hosted start page for a home network: every service one tap away with live status, a page for each person, widgets, and everyone's own calendar, with an Android app. This site also explains how Hearth uses Google Calendar."
     />
     <meta property="og:title" content="Hearth · A start page for the whole family" />
     <meta property="og:description" content="Every service in the house one tap away, a page for each person, and everyone's calendar. Self-hosted in one container." />
@@ -172,6 +172,17 @@
       .scopes li::before { content: "✓"; flex: none; display: grid; place-items: center; width: 1.35rem; height: 1.35rem; border-radius: 50%; background: rgb(34 197 94 / 0.15); color: #16a34a; font-size: 0.75rem; font-weight: 800; margin-top: 0.15rem; }
       .scopes li.no::before { content: "✕"; background: rgb(239 68 68 / 0.12); color: #dc2626; }
 
+      /* Android app */
+      .app { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 3rem; align-items: center; }
+      @media (max-width: 860px) { .app { grid-template-columns: minmax(0, 1fr); gap: 2rem; } }
+      .app .cta { justify-content: flex-start; }
+      .phones { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+      .phones figure { margin: 0; }
+      .phones figure:nth-child(2) { margin-top: 2.5rem; }
+      .phones .phone { position: static; width: 100%; min-width: 0; }
+      .phones .phone img { aspect-ratio: 9 / 16; cursor: zoom-in; }
+      .phones figcaption { margin-top: 0.7rem; color: var(--muted); font-size: 0.85rem; text-align: center; }
+
       footer { margin-top: 6rem; padding: 2.5rem 0 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
       footer.foot .wrap { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; justify-content: space-between; }
       footer.foot nav { display: flex; flex-wrap: wrap; gap: 1rem; }
@@ -204,6 +215,8 @@
         </a>
         <nav aria-label="On this page">
           <a class="opt" href="#features">Features</a>
+          <a class="opt" href="#android">Android</a>
+          <a class="opt" href="guide/">Guide</a>
           <a class="opt" href="#start">Install</a>
           <a href="#google">Google Calendar</a>
           <a class="opt-sm" href="https://github.com/mikedmor/hearth">GitHub</a>
@@ -223,6 +236,10 @@
         </p>
         <div class="cta">
           <a class="btn primary" href="#start">Install it</a>
+          <a class="btn" href="#android">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/></svg>
+            Android app
+          </a>
           <a class="btn" href="https://github.com/mikedmor/hearth">
             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
             Code on GitHub
@@ -371,6 +388,47 @@
         </div>
       </section>
 
+      <section id="android" class="wrap" aria-labelledby="android-title">
+        <div class="app">
+          <div>
+            <p class="kicker">On your phone</p>
+            <h2 id="android-title">Hearth for Android</h2>
+            <p class="lede" style="margin-inline: 0; font-size: 1.05rem">
+              Your Hearth as an app of its own, with no browser around it. It connects to your own Hearth server
+              and adds what a web page can't.
+            </p>
+            <ul class="scopes">
+              <li><span><b>Widgets on your home screen.</b> Any widget on your page can sit on the phone's home screen, kept up to date.</span></li>
+              <li><span><b>Notifications for parents:</b> a child asking for more time, someone at the front door, a device going offline. Encrypted so only your phone can read them.</span></li>
+              <li><span><b>Fingerprint lock</b> if you want one, and shortcuts to the calendar, Family and Devices when you press and hold the icon.</span></li>
+              <li><span><b>Only talks to your server.</b> No account with us, no tracking, no ads. Works at home or through your own VPN, such as Tailscale.</span></li>
+            </ul>
+            <div class="cta">
+              <a class="btn primary" href="https://play.google.com/store/apps/details?id=io.github.mikedmor.hearth" title="Get it on Google Play">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/></svg>
+                Android ↗
+              </a>
+              <a class="btn" href="https://mikedmor.com/apps/hearth/">Set up the app</a>
+            </div>
+            <p class="note" style="text-align: left">Free. Needs Android 11 or newer, and a Hearth server with an <code>https://</code> address the phone trusts.</p>
+          </div>
+          <div class="phones">
+            <figure>
+              <div class="phone"><img src="shots/app-home.webp" width="540" height="960" alt="The Hearth app on a phone: Alex's page with sections of services, each with a status dot, and favourites docked at the bottom." loading="lazy" /></div>
+              <figcaption>Every service, one tap away</figcaption>
+            </figure>
+            <figure>
+              <div class="phone"><img src="shots/app-widgets.webp" width="540" height="960" alt="The app's Widgets tab: the weather with a four-day forecast, and a services widget saying one is down." loading="lazy" /></div>
+              <figcaption>Widgets, on the page and home screen</figcaption>
+            </figure>
+            <figure>
+              <div class="phone"><img src="shots/app-more.webp" width="540" height="960" alt="More widgets in the app: the week's events, countdowns to a birthday and a beach trip, and a 3D printer at 15%." loading="lazy" /></div>
+              <figcaption>The week, countdowns and the printer</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
       <section id="start" class="wrap" aria-labelledby="start-title">
         <div class="start">
           <div>
@@ -383,7 +441,7 @@
               <li>Keep a copy of <b>.env</b> somewhere safe. Its key encrypts widget keys and calendar sign-ins.</li>
             </ol>
             <div class="cta" style="justify-content: flex-start">
-              <a class="btn" href="https://github.com/mikedmor/hearth/blob/main/guides/install.md">Install guide (Synology too)</a>
+              <a class="btn" href="guide/install/">Install guide (Synology too)</a>
             </div>
           </div>
           <div class="code">
@@ -451,7 +509,7 @@ docker compose up -d --build</pre>
           <a href="privacy.html">Privacy</a>
           <a href="terms.html">Terms</a>
           <a href="https://github.com/mikedmor/hearth">GitHub</a>
-          <a href="https://github.com/mikedmor/hearth/blob/main/guides/README.md">Guides</a>
+          <a href="guide/">Guide</a>
           <a href="https://mikedmor.github.io/">More projects by mikedmor</a>
         </nav>
       </div>
@@ -493,7 +551,7 @@ docker compose up -d --build</pre>
             e.preventDefault();
             show(a.getAttribute("href"), a.closest("figure").querySelector("figcaption").textContent);
           });
-        for (const img of document.querySelectorAll(".stage img, .people .window img"))
+        for (const img of document.querySelectorAll(".stage img, .people .window img, .phones img"))
           img.addEventListener("click", () => show(img.src, img.alt));
         zoom.addEventListener("click", (e) => {
           if (e.target === zoom || e.target.tagName === "BUTTON") zoom.close();

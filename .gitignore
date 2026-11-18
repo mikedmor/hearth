@@ -35,3 +35,6 @@ docs/
 # AI agent instructions (private, like docs/)
 CLAUDE.md
 CLAUDE.local.md
+
+# Built from guides/*.md when the public site deploys (see public-site/README.md).
+public-site/guide/

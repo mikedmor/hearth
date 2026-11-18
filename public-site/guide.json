@@ -1,0 +1,50 @@
+{
+  "name": "Hearth",
+  "src": "guides",
+  "out": "public-site/guide",
+  "repo": "https://github.com/mikedmor/hearth",
+  "branch": "main",
+  "title": "Everything about Hearth",
+  "description": "How to install, set up and use Hearth, the self-hosted start page for a home network: people and pages, widgets, the calendar, devices, the family page and the Android app.",
+  "logo": "guide-logo.svg",
+  "links": [
+    {
+      "label": "Hearth",
+      "href": "../"
+    },
+    {
+      "label": "GitHub",
+      "href": "https://github.com/mikedmor/hearth",
+      "optional": true
+    }
+  ],
+  "analytics": "<script data-goatcounter=\"https://mikedmor.goatcounter.com/count\" async src=\"//gc.zgo.at/count.js\"></script>",
+  "colors": {
+    "light": {
+      "bg": "#faf6f1",
+      "bg-2": "#f3ece4",
+      "card": "#ffffff",
+      "ink": "#2a211b",
+      "muted": "#6f6157",
+      "faint": "#9a8b80",
+      "line": "#e8ddd2",
+      "accent": "#e8743b",
+      "accent-ink": "#b9531f",
+      "glow": "rgb(232 116 59 / 0.16)",
+      "code-bg": "#15110e",
+      "code-ink": "#f3ece6"
+    },
+    "dark": {
+      "bg": "#120e0b",
+      "bg-2": "#18120e",
+      "card": "#1e1814",
+      "ink": "#f3ece6",
+      "muted": "#b1a194",
+      "faint": "#7d6e62",
+      "line": "#2e2620",
+      "accent-ink": "#ff9a63",
+      "glow": "rgb(232 116 59 / 0.2)",
+      "code-bg": "#0d0a08"
+    }
+  }
+}

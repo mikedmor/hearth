@@ -8,6 +8,7 @@ without signing everyone out every 7 days (see [Calendar](../guides/calendar.md#
 - `shots/`: the screenshots on the home page, taken from a demo home with a made-up family.
 - `privacy.html`: its privacy policy.
 - `terms.html`: its terms of service.
+- `guide/`: the guide, built from `guides/*.md` when the site deploys (see below). Ignored by git.
 - `google/`: the return page. After "Sign in with Google" in Hearth, Google sends the browser
   here. The page sends it straight home, to Hearth's `/calendar`, which finishes the sign-in.
 
@@ -62,3 +63,15 @@ the client ID and its secret, and save.
 The return page forwards to names like `start.home`, `*.local`, `*.lan`, or a private IP address.
 If your Hearth is at a public-looking name (split DNS), add that name to `ALSO_ALLOWED` in
 `google/index.html`.
+
+## The guide
+
+`guide/` is built from `guides/*.md` by guide-kit
+([mikedmor.github.io/tools/guide-kit](https://github.com/mikedmor/mikedmor.github.io/tree/main/tools/guide-kit)),
+using `guide.json` for Hearth's name, colours and logo (`guide-logo.svg`). The contents and the front page
+come from the tables in `guides/README.md`. To build it locally, with both repositories side by side:
+
+```sh
+npm ci --prefix ../mikedmor.github.io/tools/guide-kit
+node ../mikedmor.github.io/tools/guide-kit/build.mjs public-site/guide.json
+```

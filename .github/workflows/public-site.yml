@@ -1,11 +1,12 @@
 # Publishes public-site/ (and only that folder) to GitHub Pages: the home page, privacy policy
-# and return page Google needs for two-way Google Calendar.
+# and return page Google needs for two-way Google Calendar. The guides (guides/*.md) become the
+# guide at /hearth/guide/, built by guide-kit from mikedmor/mikedmor.github.io.
 name: Public site
 
 on:
   push:
     branches: [main]
-    paths: ["public-site/**", ".github/workflows/public-site.yml"]
+    paths: ["public-site/**", "guides/**", ".github/workflows/public-site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Get guide-kit
+        uses: actions/checkout@v4
+        with:
+          repository: mikedmor/mikedmor.github.io
+          path: .guide-kit
+          sparse-checkout: tools/guide-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the guide
+        run: |
+          npm ci --prefix .guide-kit/tools/guide-kit
+          node .guide-kit/tools/guide-kit/build.mjs public-site/guide.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public-site
