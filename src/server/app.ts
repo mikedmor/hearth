@@ -63,10 +63,13 @@ import { clientIp } from "./client-ip";
 import { ConfigError, type ConfigStore } from "./config-store";
 import { AdGuardError } from "./devices/adguard";
 import type { DeviceMonitor } from "./devices/monitor";
+import type { ResourceMonitor } from "./devices/resources";
 import { deviceRoutes } from "./devices/routes";
 import { DeviceError, type DeviceService, newBrowserId } from "./devices/service";
 import { DevicesFileError } from "./devices/store";
 import { defaultTargets, parseTargets, recognise, scan, scanPorts } from "./discover";
+import { energyRoutes } from "./energy/routes";
+import type { SenseService } from "./energy/sense";
 import { fetchFavicon } from "./favicon";
 import { type FileStation, FileStationError } from "./files/filestation";
 import { filesRoutes } from "./files/routes";
@@ -77,6 +80,7 @@ import { InternetError, type InternetService } from "./internet/service";
 import { InternetFileError } from "./internet/store";
 import { parseCookies, sameSite } from "./live";
 import { checkTarget, NetError } from "./net";
+import { PushError, type PushService } from "./push";
 import { isPersonalSecret, type SecretStore } from "./secrets";
 import type { SmartHomeService } from "./smarthome/service";
 import { type Sso, SsoError } from "./sso";
@@ -109,6 +113,12 @@ export interface AppDeps {
   monitor?: DeviceMonitor;
   /** The smart-home hubs (openHAB, Home Assistant). */
   smart?: SmartHomeService;
+  /** The router's and the NAS's resources. */
+  resources?: ResourceMonitor;
+  /** The Sense energy monitor, through Sense's servers once connected. */
+  sense?: SenseService;
+  /** Notifications on phones and computers (web push). */
+  push?: PushService;
   /** The NAS's shared folders, as each person (Files). */
   files?: FileStation;
   /** The update check (GitHub releases). */
@@ -431,11 +441,89 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // ---------------------------------------------------------------------------
+  // Notifications on this device (web push): parents and the admin get the house's alerts
+
+  if (deps.push) {
+    const push = deps.push;
+    const subscription = z.object({
+      endpoint: z.string().url().max(1000),
+      keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }),
+    });
+    const parent = (c: Context) => {
+      const w = who(c);
+      if (!(w.admin || deps.internet?.isParent(w)))
+        throw new HttpError(403, "Only parents and the admin get the house's alerts.");
+      return w.admin ? "admin" : (w.profile?.id as string);
+    };
+    /** The key a browser subscribes with. */
+    app.get("/api/push/key", async (c) => {
+      parent(c);
+      return c.json({ key: await push.publicKey() });
+    });
+    /** Is this device getting notifications? (The browser knows its own subscription.) */
+    app.post("/api/push/state", async (c) => {
+      const b = await body(c, z.object({ endpoint: z.string().max(1000) }));
+      return c.json({ on: await push.has(b.endpoint) });
+    });
+    app.post("/api/push/subscribe", async (c) => {
+      const whom = parent(c);
+      const b = await body(c, z.object({ subscription, label: z.string().max(60).default("") }));
+      try {
+        await push.subscribe(b.subscription, whom, b.label);
+      } catch (e) {
+        throw new HttpError(400, e instanceof PushError ? e.message : "Couldn't turn them on.");
+      }
+      return c.json({ ok: true });
+    });
+    app.post("/api/push/unsubscribe", async (c) => {
+      const b = await body(c, z.object({ endpoint: z.string().max(1000) }));
+      await push.remove(b.endpoint);
+      return c.json({ ok: true });
+    });
+    app.post("/api/push/test", async (c) => {
+      parent(c);
+      const b = await body(c, z.object({ endpoint: z.string().max(1000) }));
+      if (!(await push.has(b.endpoint)))
+        throw new HttpError(404, "Notifications aren't on for this device.");
+      const n = await push.send(
+        { title: "Hearth", text: "Notifications work on this device.", url: "/" },
+        b.endpoint,
+      );
+      if (!n) throw new HttpError(409, "The push service didn't take it. Try again in a moment.");
+      return c.json({ ok: true });
+    });
+    /** Every device that gets notifications, for the admin. */
+    app.get("/api/admin/push", async (c) => {
+      requireAdmin(c);
+      const names = new Map(cfg().profiles.map((p) => [p.id, p.name]));
+      return c.json({
+        devices: (await push.list()).map((d) => ({
+          ...d,
+          who: d.who === "admin" ? "The admin" : (names.get(d.who) ?? d.who),
+        })),
+      });
+    });
+    app.delete("/api/admin/push/:id", async (c) => {
+      requireAdmin(c);
+      await push.remove(c.req.param("id"));
+      return c.json({ ok: true });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // The page
+
+  /**
+   * Whether a phone may keep this page's data for when it's away from home: not the admin's, and
+   * not a page with a PIN (a locked page shouldn't open without it).
+   */
+  const offlineOk = (w: ReturnType<typeof who>) =>
+    !w.session.admin && !(w.profile && deps.auth.hasPin(w.profile.id));
 
   app.get("/api/home", async (c) => {
     const w = who(c);
     c.header("Cache-Control", "no-store");
+    if (offlineOk(w)) c.header("X-Hearth-Offline", "keep");
     let trustKnown: boolean | undefined;
     // The names Hearth is reached by (start.home, an address and port): its own pages aren't
     // services on the device it runs on.
@@ -475,6 +563,7 @@ export function createApp(deps: AppDeps): Hono {
         : undefined,
       trustKnown,
       build: await pageBuild(),
+      offline: offlineOk(w),
     });
   });
 
@@ -674,6 +763,7 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/status", (c) => {
     c.header("Cache-Control", "no-store");
+    if (offlineOk(who(c))) c.header("X-Hearth-Offline", "keep");
     return c.json(statusFor(deps.status(), cfg().tiles, who(c).profile?.id ?? null));
   });
 
@@ -2279,6 +2369,7 @@ export function createApp(deps: AppDeps): Hono {
       service: deps.devices,
       monitor: deps.monitor,
       smart: deps.smart,
+      resources: deps.resources,
       config: deps.config,
       secrets: deps.secrets,
       requireAdmin,
@@ -2286,6 +2377,8 @@ export function createApp(deps: AppDeps): Hono {
       here: whereFrom,
       fetch: deps.fetch,
     });
+
+  if (deps.sense) energyRoutes(app, { sense: deps.sense, config: deps.config, requireAdmin, body });
 
   // ---------------------------------------------------------------------------
   // Internet controls
@@ -2307,6 +2400,42 @@ export function createApp(deps: AppDeps): Hono {
   // ---------------------------------------------------------------------------
   // The built page, and short links
 
+  /** What a phone needs to install Hearth as an app: its name, icons, colours and shortcuts. */
+  app.get("/manifest.webmanifest", (c) => {
+    const name = cfg().settings.title || "Hearth";
+    const icon = { src: "/icon-192.png", sizes: "192x192", type: "image/png" };
+    return c.body(
+      JSON.stringify({
+        id: "/",
+        name,
+        short_name: name.length <= 12 ? name : "Hearth",
+        description: "The home's start page",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#14100e",
+        theme_color: "#14100e",
+        icons: [
+          icon,
+          { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          {
+            src: "/icon-maskable-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+        shortcuts: [
+          { name: "Calendar", url: "/calendar", icons: [icon] },
+          { name: "Family", url: "/family", icons: [icon] },
+          { name: "Devices", url: "/devices", icons: [icon] },
+        ],
+      }),
+      200,
+      { "content-type": "application/manifest+json", "cache-control": "no-cache" },
+    );
+  });
+
   if (deps.webDir) {
     const webDir = deps.webDir;
     app.get("/assets/*", async (c) => {
@@ -2318,7 +2447,24 @@ export function createApp(deps: AppDeps): Hono {
         "cache-control": "public, max-age=31536000, immutable",
       });
     });
-    for (const f of ["favicon.svg", "manifest.webmanifest"]) {
+    // The service worker: always fetched fresh, so a new version takes over at once.
+    app.get("/sw.js", async (c) => {
+      const file = await readSafe(webDir, "sw.js");
+      return file
+        ? c.body(file.body, 200, {
+            "content-type": "text/javascript; charset=utf-8",
+            "cache-control": "no-cache",
+            "service-worker-allowed": "/",
+          })
+        : c.notFound();
+    });
+    for (const f of [
+      "favicon.svg",
+      "icon-192.png",
+      "icon-512.png",
+      "icon-maskable-512.png",
+      "badge-96.png",
+    ]) {
       app.get(`/${f}`, async (c) => {
         const file = await readSafe(webDir, f);
         return file

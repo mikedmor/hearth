@@ -22,6 +22,7 @@ Everything you need to install, set up and use Hearth. New here? Start with **[I
 | [AI](ai.md)                 | Your own AI servers, chat, and who may use it                                                  |
 | [Devices](devices.md)       | Everything on your network: what's on, what runs where, AI computers, pinball tables, alerts, and whose each device is |
 | [Family](internet.md)       | The Family page: what each child can reach, activity, schedules, pause, unlock, parents       |
+| [On your phone](phone.md)   | Installing Hearth as an app, the copy it keeps for away from home, and notifications          |
 
 ## Running Hearth
 

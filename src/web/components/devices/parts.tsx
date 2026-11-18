@@ -285,9 +285,11 @@ export function DeviceEditor({
         <p className="rounded-xl bg-(--c-surface-2) px-3 py-2 text-[13px] sm:col-span-2">
           <b>Clues:</b>{" "}
           {[
-            row.identity?.name ? `it calls itself “${row.identity.name}”` : null,
+            row.identity?.name
+              ? `it calls itself “${row.identity.name}”${row.identity.via ? ` (through ${row.identity.via})` : ""}`
+              : null,
             what(row) ? (row.identity?.model ? `it says it's ${what(row)}` : what(row)) : null,
-            row.identity?.via ? `(asked by ${row.identity.via})` : null,
+            row.identity?.via && !row.identity.name ? `asked through ${row.identity.via}` : null,
             row.networkName && row.networkName !== row.identity?.name
               ? `the network calls it “${row.networkName}”`
               : null,

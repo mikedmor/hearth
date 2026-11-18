@@ -7,9 +7,11 @@ import { router } from "./App";
 import { ToastProvider } from "./components/ui";
 import { api } from "./lib/api";
 import { applyCachedLook } from "./lib/look";
+import { keepAppPushCurrent, registerServiceWorker } from "./lib/pwa";
 import { AppWidgetPage, appWidgetId } from "./pages/AppWidgetPage";
 
 applyCachedLook();
+registerServiceWorker();
 
 // start.home/?profile=kids sets this device up for one person (a bookmark on a child's tablet).
 const asked = new URL(location.href).searchParams.get("profile");
@@ -27,6 +29,8 @@ if (asked !== null) {
 
 // A home-screen widget in the Android app: just the widget, none of the page around it.
 const widgetId = appWidgetId(location.pathname);
+// In the Android app: keep the server's copy of this phone's notification address current.
+if (widgetId === null) void keepAppPushCurrent();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: true } },

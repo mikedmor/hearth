@@ -20,15 +20,19 @@ import { dockerNets } from "./devices/clues";
 import { GlInet } from "./devices/glinet";
 import { identify } from "./devices/identify";
 import { DeviceMonitor } from "./devices/monitor";
-import { ROUTER_SECRET } from "./devices/routes";
+import { ResourceMonitor } from "./devices/resources";
+import { machineSpecs, nasSnmp, ROUTER_SECRET } from "./devices/routes";
 import { DeviceService } from "./devices/service";
 import { DeviceStore } from "./devices/store";
+import { SenseService } from "./energy/sense";
+import { fcmRouteFromEnv } from "./fcm";
 import { FileStation } from "./files/filestation";
 import { InternetService } from "./internet/service";
 import { HistoryStore, InternetStore } from "./internet/store";
 import { Live, parseCookies } from "./live";
 import { LocalNames } from "./mdns";
 import { setLocalResolver } from "./net";
+import { PushService, urlForTag } from "./push";
 import { loadMasterKey, SecretStore } from "./secrets";
 import { SmartHomeService } from "./smarthome/service";
 import { Sso } from "./sso";
@@ -112,6 +116,21 @@ try {
   const issues = e.issues?.length ? `\n  ${e.issues.join("\n  ")}` : "";
   console.error(`[hearth] ${e.message}${issues}`);
 }
+// Notifications on phones: a parent's device keeps getting them while they're still a parent.
+const push = new PushService({
+  dataDir,
+  secrets,
+  // The Android app's notifications: the app's push relay unless HEARTH_PUSH_RELAY or
+  // HEARTH_FCM_CREDENTIALS says otherwise (see fcm.ts).
+  fcm: fcmRouteFromEnv(process.env),
+  allowed: (who) => {
+    if (who === "admin") return true;
+    const p = findProfile(config.get(), who);
+    return Boolean(p && internet.isParent({ admin: false, profile: p }));
+  },
+  log,
+});
+await push.init();
 const internet = new InternetService({
   secrets,
   store: internetStore,
@@ -120,6 +139,8 @@ const internet = new InternetService({
   devices: () => deviceStore.get(),
   adguard: () => devices.adguard(),
   hasPin: (p) => auth.hasPin(p),
+  push: (title, text, tag) => push.send({ title, text, url: urlForTag(tag) }),
+  pushOn: () => push.on(),
 });
 
 const statusOpts = (c: HearthConfig) => ({
@@ -143,22 +164,23 @@ let router: GlInet | null = null;
 let routerKey = "";
 /** The names browsers reach Hearth by (the app fills it; the monitor leaves those tiles out). */
 const ownHosts = new Set<string>();
+const routerClient = () => {
+  const url = config.get().settings.router.url;
+  const password = secrets.get(ROUTER_SECRET);
+  if (!url || !password) return null;
+  // One per address and password, so its session is kept between rounds.
+  const key = `${url}|${password}`;
+  if (routerKey !== key) {
+    routerKey = key;
+    router = new GlInet({ url, password });
+  }
+  return router;
+};
 const monitor = new DeviceMonitor({
   store: deviceStore,
   ownHosts: () => ownHosts,
   smart,
-  router: () => {
-    const url = config.get().settings.router.url;
-    const password = secrets.get(ROUTER_SECRET);
-    if (!url || !password) return null;
-    // One per address and password, so its session is kept between rounds.
-    const key = `${url}|${password}`;
-    if (routerKey !== key) {
-      routerKey = key;
-      router = new GlInet({ url, password });
-    }
-    return router;
-  },
+  router: routerClient,
   routerSettings: () => ({
     url: config.get().settings.router.url,
     passwordSaved: secrets.has(ROUTER_SECRET),
@@ -169,7 +191,7 @@ const monitor = new DeviceMonitor({
   tileStatus: () => checker.snapshot(),
   ai,
   tell: (title, text, tag) => internet.tell(title, text, tag),
-  alertsOn: () => Boolean(internetStore.get().notify.url),
+  alertsOn: () => internet.alertsOn(),
   log,
 });
 // `.local` names (a webcam at motioneye.local): the container can't use mDNS, so Hearth asks
@@ -182,6 +204,33 @@ const localNames = new LocalNames({
 });
 setLocalResolver((host) => localNames.resolve(host));
 
+// The router's and the NAS's resources, while someone is looking.
+const resources = new ResourceMonitor({
+  router: routerClient,
+  routerUrl: () => config.get().settings.router.url,
+  nas: () => nasSnmp(config.get(), secrets),
+  machines: () => machineSpecs(config.get(), secrets),
+  onChange: () => hub.resourcesChanged(),
+});
+
+// The Sense energy monitor: through Sense's servers, only once the admin connects it.
+const sense = new SenseService({
+  settings: () => config.get().settings.sense,
+  token: (name) => secrets.get(`sense:${name}`),
+  save: async (s, tokens) => {
+    if (s) {
+      await config.update((draft) => {
+        draft.settings.sense = s;
+      });
+    }
+    for (const [k, v] of Object.entries(tokens))
+      if (v !== undefined) await secrets.set(`sense:${k}`, v);
+  },
+  costSettings: () => config.get().settings.energy,
+  onChange: () => hub.resourcesChanged(),
+  log,
+});
+
 const hub = new WidgetHub({
   config: () => config.get(),
   status: () => checker.snapshot(),
@@ -191,7 +240,11 @@ const hub = new WidgetHub({
   hearth: (what) =>
     what === "devices" || what === "network" || what === "smarthome"
       ? monitor.widgetData(what)
-      : null,
+      : what === "resources"
+        ? resources.widgetData()
+        : what === "energy"
+          ? sense.widgetData()
+          : null,
   connection: (to) => connections(config.get(), secrets).find((c) => c.to === to) ?? null,
   secrets,
   log,
@@ -250,6 +303,9 @@ const app = createApp({
   devices,
   monitor,
   smart,
+  resources,
+  sense,
+  push,
   files: new FileStation({ url: () => config.get().settings.files.url }),
   updates,
   ownHosts,
@@ -310,6 +366,8 @@ const shutdown = () => {
   ai.stop();
   internet.stop();
   devices.stop();
+  resources.stop();
+  sense.stop();
   hub.stopAll();
   live?.close();
   stopWatching();

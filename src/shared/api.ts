@@ -147,6 +147,8 @@ export interface HomeView {
   trustKnown?: boolean;
   /** The page Hearth serves now (its script's name): an open tab that differs is out of date. */
   build?: string;
+  /** This page may be kept on the device for when it's away from home (no PIN, not the admin). */
+  offline?: boolean;
   look: Look;
   /** Custom themes made in this home (built-in ones ship with the page). */
   themes: Theme[];

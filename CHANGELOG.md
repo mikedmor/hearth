@@ -4,14 +4,26 @@ All notable changes to Hearth are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-17
+
+Hearth on your phone, and how the house is doing: the router, the NAS, access points, computers and the energy monitor.
+
 ### Added
 
+- **How the router and the NAS are doing**, without installing anything on them. Open either one on the Devices page to see its processor, memory, temperature, traffic, volumes, each disk's health and what needs a look, with charts of the last half hour. The router uses the sign-in the network map already has; the NAS uses SNMP, read only (turn it on in DSM, then **Devices → Setup → NAS**). A new **Router and NAS** widget in the gallery shows the same on any page. See [Devices](guides/devices.md#how-the-router-and-the-nas-are-doing).
+- **Mesh access points and computers too.** **Devices → Setup → Other machines** adds a GL.iNet access point (with its admin password) or a computer running [Glances](https://nicolargo.github.io/glances/), and each gets the same **How it's doing** in its panel. See [More machines](guides/devices.md#more-machines-access-points-and-computers).
+- **The Sense energy monitor**, as a widget: what the home uses now, solar, today's use and what's on. Sense only works through its own servers, so connecting it (**Devices → Setup**) is an opt-in to reaching Sense on the internet. Your password is never kept, and Hearth asks at most once a minute while the widget is open. It also shows **what it costs**: today, this bill so far and what it's on track for, from the rate and billing day in your Sense app (or your state's average, which Sense finds from your postal code). Change any of them, or add your bill's fixed charge, in **Setup → Sense → Cost**. See [The Sense energy monitor](guides/devices.md#the-sense-energy-monitor).
+- **Hearth as an app on your phone.** Install it from the browser (Hearth offers it under the top bar on Android) and it opens full screen from its own icon, with shortcuts to Calendar, Family and Devices. Away from home it opens with the last page you saw, and says when it's from; pages with a PIN and anything the admin sees are never kept on the phone. Needs https (a phone that trusts the home's certificate). See [On your phone](guides/phone.md).
+- **Notifications on your phone** for parents and the admin: a child asking, someone at the front door, a watched device going offline. Turn them on per device at the bottom of the Family page. They travel through the phone browser's push service, encrypted so only that phone can read them. See [Notifications](guides/phone.md#notifications).
 - **On your phone's home screen.** In the Hearth app for Android (coming soon), any widget on your page can be a home-screen widget: long-press the home screen, add **Hearth**, and pick one. It keeps itself up to date, fits itself to the size you give it, and opens Hearth when you tap it. See [Widgets](guides/widgets.md#on-your-phones-home-screen).
 - **A new look for the Weather widget:** now on the left (a big icon, the temperature, the conditions, whether it's warmer or cooler than yesterday, and the place) and the next days on the right, each with its icon, high and low. It sits in one column on a narrow widget. Add it again from the gallery to get the new look, with a **Place name** if you like. Custom widgets can use the same layout: the new **Weather forecast** block, and `weekday()` and `wmoText()` in formulas.
 
 ### Fixed
 
 - In widgets, a date with no time (as weather services give days) no longer shows as the day before in time zones west of UTC.
+- A widget's **bars** block no longer fails the check when its value names a field.
+- On the Devices page, a long status ("Offline · seen 3 days ago") no longer runs past the edge of a person's card. A device's panel says "part of the house" as its setting does, reads its clues in plain words, and skips the home-certificate line for devices without a browser, like routers and plugs.
+- On a phone, the page tabs get their own row under the top bar, so the bar no longer runs off the screen. Before, the page could slide sideways, the person button was cut off and the dock sat off the edge. Tab names now show from 1280 pixels wide, where they fit.
 
 ## [1.0.0] - 2026-11-11
 

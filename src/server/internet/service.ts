@@ -75,6 +75,10 @@ export interface InternetDeps {
   now?: () => number;
   /** For alerts; swapped out in tests. */
   fetch?: typeof fetch;
+  /** Alerts also go to the phones and computers that turned notifications on. */
+  push?: (title: string, text: string, tag: string) => Promise<unknown>;
+  /** Some phone or computer has notifications on. */
+  pushOn?: () => boolean;
   /** Where the front door's house password is kept (encrypted). */
   secrets?: {
     get(name: string): string | undefined;
@@ -1266,8 +1270,13 @@ export class InternetService {
 
   /** Send an alert to the address the admin gave (ntfy, Home Assistant, Gotify…), if any. */
   async tell(title: string, text: string, tag = "house"): Promise<void> {
+    // Phones with notifications on get it whether or not there's an alerts address.
+    const pushed = this.deps.push?.(title, text, tag).catch(() => {});
     const url = this.deps.store.get().notify.url;
-    if (!url) return;
+    if (!url) {
+      await pushed;
+      return;
+    }
     // Header values must be plain ASCII; anything else goes in the message itself.
     const ascii = /^[\x20-\x7e]*$/.test(title);
     try {
@@ -1289,6 +1298,12 @@ export class InternetService {
     } catch (e) {
       this.notifyError = e instanceof NetError ? e.message : "Couldn't send it.";
     }
+    await pushed;
+  }
+
+  /** Alerts go somewhere: the alerts address, or phones with notifications on. */
+  alertsOn(): boolean {
+    return Boolean(this.deps.store.get().notify.url) || (this.deps.pushOn?.() ?? false);
   }
 
   /** Alert about sites a child was first blocked from today (if the admin asked for that). */
@@ -1297,7 +1312,7 @@ export class InternetService {
     who: Map<string, Owner>,
   ): Promise<void> {
     const f = this.deps.store.get();
-    if (!f.notify.url || !f.notify.blocked) return;
+    if (!this.alertsOn() || !f.notify.blocked) return;
     const today = this.dayOf(this.now());
     const allowed = new Map<string, Set<string>>();
     for (const { q } of fresh) {

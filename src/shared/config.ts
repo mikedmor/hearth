@@ -325,6 +325,62 @@ export const SettingsSchema = z.object({
    */
   router: z.object({ url: z.string().max(300).optional() }).prefault({}),
   /**
+   * The NAS, for its resources (processor, memory, temperature, disks, volumes) over SNMP, read
+   * only. v2c: the community is the secret "nas:snmp". v3: the user's password is "nas:snmp" and
+   * the encryption password "nas:snmp-priv" (the user's password when absent).
+   */
+  nas: z
+    .object({
+      host: z.string().trim().max(200).optional(),
+      version: z.enum(["2c", "3"]).default("3"),
+      user: z.string().trim().max(100).optional(),
+      auth: z.enum(["sha", "md5"]).default("sha"),
+      priv: z.enum(["aes", "des", "none"]).default("aes"),
+    })
+    .prefault({}),
+  /**
+   * More machines to read the resources of: another GL.iNet (a mesh access point) through its
+   * admin API, or a computer running Glances. Each one's password is the secret "machine:<id>".
+   */
+  machines: z
+    .array(
+      z.object({
+        id: z.string().regex(/^[a-z0-9-]{1,40}$/),
+        kind: z.enum(["glinet", "glances"]),
+        name: z.string().trim().min(1).max(60),
+        url: z.string().max(300),
+        /** Glances' user, when it asks for one ("glances" by default). */
+        user: z.string().trim().max(100).optional(),
+      }),
+    )
+    .max(20)
+    .default([]),
+  /**
+   * The Sense energy monitor, through Sense's own servers on the internet (it has no local API).
+   * Connecting it is the opt-in. The password is never kept: only Sense's tokens, as the secrets
+   * "sense:access" and "sense:refresh".
+   */
+  sense: z
+    .object({
+      email: z.string().max(200).optional(),
+      userId: z.string().max(100).optional(),
+      monitorId: z.string().max(100).optional(),
+      /** Hearth's own device id at Sense (random, kept so Sense sees one device). */
+      deviceId: z.string().max(64).optional(),
+    })
+    .prefault({}),
+  /**
+   * What electricity costs, when Hearth should differ from Sense: the rate in cents a kWh, the
+   * day of the month each bill starts, and a fixed charge on every bill (dollars). Empty: Sense's.
+   */
+  energy: z
+    .object({
+      rate: z.number().positive().max(500).optional(),
+      cycleStart: z.number().int().min(1).max(31).optional(),
+      fixed: z.number().min(0).max(1000).optional(),
+    })
+    .prefault({}),
+  /**
    * Which roles may use each feature (chat's is `ai.chatRoles`). The admin, signed in, always
    * may. Files is off for children until the admin turns it on.
    */

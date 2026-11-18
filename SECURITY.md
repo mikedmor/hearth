@@ -4,7 +4,7 @@ Hearth is the front door to a home network. Anyone on that network can open it, 
 
 ## Supported versions
 
-Hearth is before 1.0. Security fixes go into the newest version on `main`; update with `git pull` and rebuild (see [Updating](guides/install.md#updating)).
+Security fixes go into the newest release. Update by pulling the newest image, or with `git pull` and a rebuild (see [Updating](guides/install.md#updating)).
 
 ## Reporting a vulnerability
 
@@ -47,6 +47,10 @@ Hearth calls only the home network by default. Each connection below happens onl
 | AI                            | The AI servers the admin adds                                                                 |
 | Devices                       | AdGuard Home on your router, once the admin connects it; and each device on the network, by its private address: to ask what it is (Google Cast, Bonjour, Roku, Sonos, Hue, Shelly, WLED, Tasmota, its web page), to knock on a few usual ports to see whether it's on, and to check its ports for apps (a computer, server or console once a day by itself, any device when the admin asks). Read only |
 | Network map                   | The router the admin connects (a GL.iNet router), on the home network only: it signs in with a challenge (a hash of the admin password, never the password itself) and reads who's connected to what, every minute. It changes nothing; the password is stored encrypted |
+| How machines are doing        | Only while the Devices page or a widget is open, every 30 seconds, all on the home network: the router and any GL.iNet access points the admin adds (signed in as for the network map), the NAS over SNMP (read only; v3 is encrypted), and computers running Glances (its read-only web API). Passwords are stored encrypted |
+| Sense energy monitor          | `api.sense.com` (and, for older monitors, its live feed at `clientrt.sense.com`), only once the admin connects Sense: at most once a minute while a page with the widget is open, and today's totals every ten minutes. The Sense password is sent once to sign in and never stored; Sense's sign-in token is stored encrypted. Nothing about the home is sent, only requests for the account's own readings |
+| Notifications on phones       | The push service of each device a parent or the admin turned notifications on for (Google's for Chrome, Mozilla's for Firefox…), only with an alert. Each message is encrypted for that one device (web push, RFC 8291) and signed with Hearth's own key, kept encrypted; the push service sees that something was sent, never what. A device the push service says is gone is forgotten. **In the Android app:** the app's push relay (`HEARTH_PUSH_RELAY`, or `off`), which passes the phone's token and the encrypted message to Google's Firebase, or Firebase directly with your own key (`HEARTH_FCM_CREDENTIALS`) |
+| The app on a phone            | Nothing: the copy a phone keeps for away from home stays on that phone. It holds only what the server marks as keepable (never the admin's, never a page with a PIN), and opening a page with a PIN clears it |
 | Smart home                    | The openHAB or Home Assistant the admin connects, on the home network only: its devices, items and states every minute, with a token kept encrypted. A switch only when the admin presses it |
 | AI computers                  | The AI servers the admin adds: their list of computers, for a server that shares several (with the same key as chat) |
 | Pinball tables                | VPin Studio on a table on your network (port 8089, which has no password): its status, scores and players every minute. Its controls (start a table, mute, restart, shut down) only when the admin presses them |

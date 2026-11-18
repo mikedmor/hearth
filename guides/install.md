@@ -86,6 +86,8 @@ If your home has its own certificate authority (step-ca, say) and serves `https:
 | `HEARTH_PORT`         | `8082`                                   | The port Hearth listens on                                                                                          |
 | `HEARTH_HOST`         | `0.0.0.0`                                | The address it listens on                                                                                           |
 | `HEARTH_DATA_DIR`     | `/data` (in the image), `./data` (dev)   | Where its files live                                                                                                |
+| `HEARTH_PUSH_RELAY`   | the Hearth app's relay                   | Where notifications to the Android app go: the app's push relay by default, `off` for none, or your own relay's `https://` address (it only ever sees the phone's token and the encrypted notification) |
+| `HEARTH_FCM_CREDENTIALS` | none                                  | A Firebase service-account key file, to send to an Android app you built yourself straight through Firebase instead of a relay |
 | `TZ`                  | UTC                                      | The time zone for the server's clock                                                                                |
 | `NODE_EXTRA_CA_CERTS` | none                                     | A root certificate to trust, for `https` services that use your own certificate authority                          |
 

@@ -1,6 +1,7 @@
 /** The devices page's routes: the admin's only. */
 import type { Context, Hono } from "hono";
 import { z } from "zod";
+import type { HearthConfig } from "../../shared/config";
 import {
   DEVICE_TYPES,
   KIND_ID,
@@ -8,15 +9,52 @@ import {
   PLACES,
   TREATMENTS,
 } from "../../shared/devices";
+import type { ResourcesView } from "../../shared/resources";
 import { HUB_NAMES, HUBS, type HubKind } from "../../shared/smarthome";
 import type { ConfigStore } from "../config-store";
 import type { SecretStore } from "../secrets";
 import { type SmartHomeService, tokenSecret } from "../smarthome/service";
 import { AdGuard } from "./adguard";
+import { GlancesError } from "./glances";
 import { GlInet, RouterError } from "./glinet";
 import type { DeviceMonitor } from "./monitor";
+import { type MachineSpec, machineClient, type ResourceMonitor } from "./resources";
+import { SnmpError, SnmpReader, type SnmpSettings } from "./snmp";
 
 export const ROUTER_SECRET = "router:password";
+export const NAS_SECRET = "nas:snmp";
+export const NAS_PRIV_SECRET = "nas:snmp-priv";
+
+/** The NAS's SNMP settings, with its secrets, when it's set up. */
+export function nasSnmp(cfg: HearthConfig, secrets: SecretStore): SnmpSettings | null {
+  const n = cfg.settings.nas;
+  if (!n.host) return null;
+  return {
+    host: n.host,
+    version: n.version,
+    user: n.user,
+    auth: n.auth,
+    priv: n.priv,
+    secret: secrets.get(NAS_SECRET),
+    privSecret: secrets.get(NAS_PRIV_SECRET),
+  };
+}
+
+export const machineSecret = (id: string) => `machine:${id}`;
+
+/** The added machines, with their passwords. */
+export function machineSpecs(cfg: HearthConfig, secrets: SecretStore): MachineSpec[] {
+  return cfg.settings.machines.map((m) => ({ ...m, password: secrets.get(machineSecret(m.id)) }));
+}
+
+async function readOnce(s: SnmpSettings): Promise<unknown> {
+  const r = new SnmpReader(s);
+  try {
+    return await r.read();
+  } finally {
+    r.close();
+  }
+}
 
 import { ADGUARD_SECRET, DeviceError, type DeviceService } from "./service";
 
@@ -26,6 +64,12 @@ export interface DeviceRouteDeps {
   monitor?: DeviceMonitor;
   /** The smart-home hubs. */
   smart?: SmartHomeService;
+  /** The router's and the NAS's resources. */
+  resources?: ResourceMonitor;
+  /** Reads a NAS once, to check its settings before saving (a fake in tests). */
+  checkNas?: (s: SnmpSettings) => Promise<unknown>;
+  /** Reads an added machine once, to check it before saving (a fake in tests). */
+  checkMachine?: (m: MachineSpec) => Promise<unknown>;
   config: ConfigStore;
   secrets: SecretStore;
   requireAdmin: (c: Context) => unknown;
@@ -122,6 +166,183 @@ export function deviceRoutes(app: Hono, d: DeviceRouteDeps): void {
     });
     if (b.password !== undefined) await d.secrets.set(ROUTER_SECRET, b.password || null);
     await d.monitor?.refreshRouterNow();
+    await d.resources?.reset();
+    return c.json({ ok: true });
+  });
+
+  // The router's and the NAS's resources.
+
+  app.get("/api/admin/resources", (c) => {
+    d.requireAdmin(c);
+    d.resources?.want();
+    const n = d.config.get().settings.nas;
+    const view: ResourcesView = {
+      machines: [],
+      ...(d.resources?.view() ?? {}),
+      setup: {
+        machines: d.config.get().settings.machines.map((m) => ({
+          id: m.id,
+          kind: m.kind,
+          name: m.name,
+          url: m.url,
+          user: m.user,
+          secretSaved: d.secrets.has(machineSecret(m.id)),
+        })),
+        routerConnected: Boolean(
+          d.config.get().settings.router.url && d.secrets.has(ROUTER_SECRET),
+        ),
+        nas: {
+          host: n.host,
+          version: n.version,
+          user: n.user,
+          auth: n.auth,
+          priv: n.priv,
+          secretSaved: d.secrets.has(NAS_SECRET),
+          privSaved: d.secrets.has(NAS_PRIV_SECRET),
+        },
+      },
+    };
+    return c.json(view);
+  });
+
+  /** Connect the NAS over SNMP: checked (read once) before saving. An empty host disconnects. */
+  app.put("/api/admin/nas", async (c) => {
+    d.requireAdmin(c);
+    const b = await d.body(
+      c,
+      z.object({
+        host: z.string().trim().max(200),
+        version: z.enum(["2c", "3"]),
+        user: z.string().trim().max(100).optional(),
+        auth: z.enum(["sha", "md5"]).default("sha"),
+        priv: z.enum(["aes", "des", "none"]).default("aes"),
+        /** null removes it; left out keeps it. */
+        secret: z.string().max(200).nullable().optional(),
+        privSecret: z.string().max(200).nullable().optional(),
+      }),
+    );
+    const host = b.host.replace(/^[a-z]+:\/\//i, "").replace(/[/:].*$/, "");
+    if (b.host && !/^[a-z0-9.-]+$/i.test(host))
+      throw new DeviceError("Give the NAS's address, like 192.168.1.20 or nas.home.");
+    if (host) {
+      const keep = (v: string | null | undefined, name: string) =>
+        v === undefined ? d.secrets.get(name) : (v ?? undefined);
+      const settings: SnmpSettings = {
+        host,
+        version: b.version,
+        user: b.user || undefined,
+        auth: b.auth,
+        priv: b.priv,
+        secret: keep(b.secret, NAS_SECRET),
+        privSecret: keep(b.privSecret, NAS_PRIV_SECRET),
+      };
+      try {
+        await (d.checkNas ?? readOnce)(settings);
+      } catch (e) {
+        throw new DeviceError(e instanceof SnmpError ? e.message : "The NAS didn't answer SNMP.");
+      }
+    }
+    await d.config.update((draft) => {
+      draft.settings.nas = {
+        host: host || undefined,
+        version: b.version,
+        user: b.user || undefined,
+        auth: b.auth,
+        priv: b.priv,
+      };
+    });
+    if (b.secret !== undefined) await d.secrets.set(NAS_SECRET, b.secret || null);
+    if (b.privSecret !== undefined) await d.secrets.set(NAS_PRIV_SECRET, b.privSecret || null);
+    await d.resources?.reset();
+    return c.json({ ok: true });
+  });
+
+  /**
+   * Add or change a machine to read the resources of: a GL.iNet access point (its admin password)
+   * or a computer running Glances (its password, if it has one). Checked (read once) before saving.
+   * `new` makes one; any other id changes that one.
+   */
+  app.put("/api/admin/machines/:id", async (c) => {
+    d.requireAdmin(c);
+    const b = await d.body(
+      c,
+      z.object({
+        kind: z.enum(["glinet", "glances"]),
+        name: z.string().trim().min(1, "Give it a name").max(60),
+        url: z.string().trim().min(1, "Give its address").max(300),
+        user: z.string().trim().max(100).optional(),
+        /** null removes it; left out keeps it. */
+        password: z.string().max(200).nullable().optional(),
+      }),
+    );
+    const list = d.config.get().settings.machines;
+    const param = c.req.param("id");
+    const old = param === "new" ? undefined : list.find((m) => m.id === param);
+    if (param !== "new" && !old) throw new DeviceError("No such machine.", 404);
+    if (!old && list.length >= 20) throw new DeviceError("That's 20 machines: take one off first.");
+    let raw = b.url;
+    if (!/^[a-z]+:\/\//i.test(raw)) raw = `http://${raw}`;
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      throw new DeviceError("Give its full address, like http://192.168.1.2.");
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:")
+      throw new DeviceError("The address starts with http:// or https://.");
+    // Glances listens on 61208 unless it was told otherwise.
+    if (b.kind === "glances" && !u.port && !b.url.match(/:\d+/)) u.port = "61208";
+    const url = u.origin;
+    const slug =
+      b.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 30) || "machine";
+    let id = old?.id ?? slug;
+    for (let n = 2; !old && list.some((m) => m.id === id); n++) id = `${slug}-${n}`;
+    const password =
+      b.password === undefined ? d.secrets.get(machineSecret(id)) : (b.password ?? undefined);
+    const spec: MachineSpec = {
+      id,
+      kind: b.kind,
+      name: b.name,
+      url,
+      user: b.user || undefined,
+      password,
+    };
+    if (b.kind === "glinet" && !password)
+      throw new DeviceError("Give its admin password (the one its own admin page asks for).");
+    try {
+      await (d.checkMachine ?? ((m) => machineClient(m).read()))(spec);
+    } catch (e) {
+      throw new DeviceError(
+        e instanceof RouterError || e instanceof GlancesError
+          ? e.message
+          : `${b.name} didn't answer.`,
+      );
+    }
+    await d.config.update((draft) => {
+      const entry = { id, kind: b.kind, name: b.name, url, user: b.user || undefined };
+      const i = draft.settings.machines.findIndex((m) => m.id === id);
+      if (i >= 0) draft.settings.machines[i] = entry;
+      else draft.settings.machines.push(entry);
+    });
+    if (b.password !== undefined) await d.secrets.set(machineSecret(id), b.password || null);
+    await d.resources?.reset();
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/api/admin/machines/:id", async (c) => {
+    d.requireAdmin(c);
+    const id = c.req.param("id");
+    if (!d.config.get().settings.machines.some((m) => m.id === id))
+      throw new DeviceError("No such machine.", 404);
+    await d.config.update((draft) => {
+      draft.settings.machines = draft.settings.machines.filter((m) => m.id !== id);
+    });
+    await d.secrets.set(machineSecret(id), null);
+    await d.resources?.reset();
     return c.json({ ok: true });
   });
 

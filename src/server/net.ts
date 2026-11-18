@@ -77,7 +77,7 @@ export interface FetchOptions {
   /** Calendars also use PROPFIND, REPORT, PUT, PATCH and DELETE. */
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "PROPFIND" | "REPORT";
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | Uint8Array<ArrayBuffer>;
   timeoutMs?: number;
   maxBytes?: number;
   policy: NetPolicy;

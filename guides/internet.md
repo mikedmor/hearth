@@ -61,7 +61,7 @@ On a child's device, the strip at the top of Hearth has **Ask**: more time (15 m
 
 ## Alerts
 
-Parents with Hearth open get a message when a child asks. To get alerts on your phone too, give a web address in **Settings → Internet → Alerts** that takes a message, such as an [ntfy](https://ntfy.sh) topic (its app pushes it to your phone), Home Assistant or Gotify. **Send a test** checks it. Optionally, also get an alert the first time each day a child is blocked from a new site.
+Parents with Hearth open get a message when a child asks. To get alerts on your phone too, give a web address in **Settings → Internet → Alerts** that takes a message, such as an [ntfy](https://ntfy.sh) topic (its app pushes it to your phone), Home Assistant or Gotify. **Send a test** checks it. Or skip the address and turn on [notifications on your phone](phone.md#notifications), at the bottom of the Family page. Optionally, also get an alert the first time each day a child is blocked from a new site.
 
 A public ntfy topic can be read by anyone who guesses its name: choose a long, unguessable one, or run ntfy on your own network.
 

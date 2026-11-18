@@ -88,6 +88,56 @@ Access is kept encrypted and used only to read. Widgets for that app (from **Add
 
 A device is **online** when it looked something up through AdGuard Home in the last ten minutes, answered when Hearth knocked (even a "no" means it's there), or one of its services answered. Hearth knocks on saved devices every couple of minutes. One that's quiet and doesn't answer is **offline**; one Hearth can't tell about yet shows grey.
 
+## How the router and the NAS are doing
+
+Open the router or the NAS (or a [machine you added](#more-machines-access-points-and-computers)) on the Devices page and its panel starts with **How it's doing**: the processor, memory, temperature and traffic (each with a small chart of the last half hour), how full each volume is, each disk's health and temperature, how long it's been up, and anything that needs a look, in plain words ("Drive 2: crashed.", "Volume 1 is 93% full."). Nothing gets installed on either one. Hearth reads them every 30 seconds while the page or a widget is open, and stops a few minutes after nobody's looking.
+
+| Machine | Where it comes from | What you get |
+| --- | --- | --- |
+| **Router** | The same sign-in as the network map (**Setup → Router**) | Load, memory, processor temperature, its own storage, uptime, whether the internet is up, and the traffic its devices move |
+| **NAS** | SNMP, read only (**Setup → NAS**) | Processor, load, memory, system temperature, each volume and storage pool, each disk's health and temperature, fans and power, network traffic, and whether a DSM update is waiting |
+
+**Turning SNMP on (Synology):** in DSM, **Control Panel → Terminal & SNMP → SNMP**, tick **Enable SNMP service**. Pick **SNMPv3** if you can: give it a user name, a password and the default protocols (SHA, and AES for privacy), with its own privacy password if you like. (SNMPv1/v2c works too, with a community name you pick: treat it like a password, not "public".) Apply, then put the same settings in **Devices → Setup → NAS** and press **Check and save**: Hearth reads the NAS once before it saves. The passwords are kept encrypted, and SNMP can only read, never change anything.
+
+Other NAS brands and Linux servers with SNMP turned on also work: you get the processor, memory, volumes, uptime and traffic (temperatures and disk health are Synology's own).
+
+### More machines: access points and computers
+
+**Setup → Other machines → Add a machine** reads more of the home's machines the same way. Each one gets the same **How it's doing** in its device's panel (matched by its address), and a line in the card saying how it is.
+
+| Machine | What Hearth needs | What you get |
+| --- | --- | --- |
+| **GL.iNet access point** (a mesh node, or a second GL.iNet in access-point mode) | Its admin page's address and its admin password | Load, memory, processor temperature, its own storage, uptime, and the traffic its devices move. No internet line: the main router has that |
+| **Computer running Glances** | Its address (port 61208 unless you give another), and a password only if Glances was started with one | Processor, load, memory, the processor's temperature, each disk, uptime and network traffic |
+
+[Glances](https://nicolargo.github.io/glances/) is a small open-source monitor for Windows, macOS and Linux. It's the one thing to install: run it in web mode (`glances -w`, or its Docker image) and leave it running. Version 4 and version 3 both work. Hearth checks each machine answers before it saves it, keeps the passwords encrypted, and only reads.
+
+There's a ready-made **Router and NAS** widget in the gallery, and any widget can use these numbers: a Hearth source of **Router, NAS and machines** (`resources`), as `$r.nas.cpu`, `$r.nas.temp`, `$r.nas.volume.percent`, `$r.router.load1`, `$r.nas.history.cpu` for a chart, `$r.machines` for the added machines (each with the same fields, and `kind`), and `$r.problems` for everything that needs a look on all of them.
+
+## The Sense energy monitor
+
+A [Sense](https://sense.com) home energy monitor can show on the start page: what the home is using now, solar if you have it, today's use, and the devices Sense recognises that are on. Add the **Sense energy** widget from the gallery.
+
+**Connecting it:** **Devices → Setup → Sense energy monitor**, with the email and password you use in the Sense app (and the code from your authenticator app, if your account asks for one).
+
+Unlike everything else on this page, **this goes through the internet**. Sense has no way to read the monitor on your own network: its app, and Hearth, ask Sense's servers. So connecting it is your opt-in, and only for Sense:
+
+- Your password is sent to Sense once, to sign in, and **never kept**. Sense answers with a sign-in token, which Hearth keeps encrypted and renews. **Disconnect** forgets it.
+- Hearth asks Sense for a reading at most **once a minute**, and only while a page with the widget is open; today's totals every ten minutes.
+- It uses the same API as Sense's own app, which Sense hasn't published, so Sense can change it. If they do, the widget says it can't read Sense until Hearth catches up.
+
+**What it costs.** Hearth shows today's cost, **this bill so far** and what it's **on track for** by the end of the billing period. It takes these from your Sense account:
+
+| | Where it comes from | Change it in Hearth |
+| --- | --- | --- |
+| **Rate** (¢ a kWh) | The rate you set in the Sense app; without one, your state's average, which Sense looks up from your postal code | **Setup → Sense → Cost → Change** |
+| **Billing day** | The day your bill starts, set in the Sense app (the 1st without one) | Same place |
+| **Fixed charge** | Not in Sense: your bill's base fee, if you want it counted | Same place |
+
+Leave a box empty to go back to Sense's. With solar, what you sell back is taken off at Sense's sell-back rate. It's an estimate: taxes, tiered prices and time-of-use rates aren't counted.
+
+Any widget can use the readings: a Hearth source of **Sense energy** (`energy`), as `$e.watts` (or `$e.kw`), `$e.solarWatts`, `$e.gridWatts` (negative while you're selling), `$e.devices` (on now, the biggest first, each with `name` and `watts`), `$e.today.kwh`, `$e.today.top`, `$e.history.watts` for a chart, and the cost: `money($e.cost.bill)`, `money($e.cost.projected)`, `money($e.cost.today)`, `$e.cost.rate` and `$e.cost.daysLeft`.
+
 ## AI computers
 
 If your AI server shares several computers and lists them for apps (`/api/machines`, with the same key Hearth uses for chat), each computer shows on its own device: ready, answering or not lending right now (and why), the model it has loaded, how many answers it has given and how long they take, its version, and its processor, memory and graphics cards. A computer that's asleep says whether the server can wake it. A plain Ollama server is one computer, and shows as a service on its device.

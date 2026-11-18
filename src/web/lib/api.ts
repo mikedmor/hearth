@@ -1,4 +1,5 @@
 /** Talking to Hearth's server. Every change carries the header the server requires (CSRF). */
+import { kept } from "./pwa";
 
 export class ApiError extends Error {
   constructor(
@@ -24,6 +25,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     credentials: "same-origin",
   });
+  // The service worker answers with a kept copy when home can't be reached, and says when from.
+  if (method === "GET" && path.startsWith("/api/")) kept.set(res.headers.get("x-hearth-saved"));
   const text = await res.text();
   let data: unknown = null;
   try {

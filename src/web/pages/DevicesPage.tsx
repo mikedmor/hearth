@@ -41,6 +41,8 @@ import type {
   VpinView,
 } from "../../shared/devices";
 import { AccessButton, AccessCard, accessForUrl, useAccess } from "../components/devices/Access";
+import { SenseCard } from "../components/devices/Energy";
+import { MachinesCard } from "../components/devices/Machines";
 import { NetworkMapView, RouterCard } from "../components/devices/NetworkMap";
 import {
   AdGuardCard,
@@ -56,6 +58,12 @@ import {
   title,
   what,
 } from "../components/devices/parts";
+import {
+  NasCard,
+  ResourcesSection,
+  resourcesFor,
+  useResources,
+} from "../components/devices/Resources";
 import { SmartSection, smartLine } from "../components/devices/SmartHome";
 import { Avatar } from "../components/Picker";
 import { TileIcon } from "../components/Tile";
@@ -449,6 +457,9 @@ export function DevicesPage() {
         {setup ? (
           <div className="grid gap-5 lg:grid-cols-2">
             <RouterCard view={v} />
+            <NasCard />
+            <MachinesCard />
+            <SenseCard />
             <AdGuardCard view={v} />
             <NewDevicesCard view={v} />
             <KindsCard />
@@ -614,7 +625,7 @@ function PeopleSection({
                   </span>
                 </div>
               </div>
-              <ul className="grid gap-0.5">
+              <ul className="grid grid-cols-1 gap-0.5">
                 {mine.map((d) => (
                   <li key={d.key}>
                     <DeviceLine d={d} onOpen={() => onOpen(d.key)} />
@@ -635,7 +646,7 @@ function PeopleSection({
                 <span className="text-[12px] text-muted">Used by more than one person</span>
               </div>
             </div>
-            <ul className="grid gap-0.5">
+            <ul className="grid grid-cols-1 gap-0.5">
               {order(shared).map((d) => (
                 <li key={d.key}>
                   <DeviceLine
@@ -812,6 +823,9 @@ function PresenceDot({ d, className }: { d: DeviceView; className?: string }) {
   );
 }
 
+/** Kinds of device with a browser that could open Hearth (and so trust its certificate). */
+const BROWSES = new Set(["phone", "tablet", "laptop", "desktop", "tv", "console", "unknown"]);
+
 function presenceText(d: DeviceView): string {
   if (d.presence === "online") return d.lastSeen ? `Online · ${ago(d.lastSeen)}` : "Online";
   if (d.presence === "offline") return d.lastSeen ? `Offline · seen ${ago(d.lastSeen)}` : "Offline";
@@ -984,6 +998,8 @@ function DeviceSheet({
     }
   };
   const named = title(row);
+  const { data: resourcesView } = useResources();
+  const res = resourcesFor(resourcesView, row);
   const w = what(row);
   const main = row.services.filter((x) => !x.hidden && !x.minor);
   const ports = row.services.filter((x) => !x.hidden && x.minor);
@@ -1022,7 +1038,7 @@ function DeviceSheet({
                 owner
                   ? `${owner.name}'s`
                   : row.device?.treatment === "always"
-                    ? "always allowed"
+                    ? "part of the house"
                     : null,
               ]
                 .filter(Boolean)
@@ -1042,11 +1058,11 @@ function DeviceSheet({
                     </Link>
                   )}
                 </>
-              ) : (
+              ) : BROWSES.has(typeOf(row)) ? (
                 <span className="text-muted">
-                  Home certificate: unknown (no browser on it has opened Hearth by its name yet)
+                  Home certificate: not known yet (no browser on it has opened Hearth by its name)
                 </span>
-              )}
+              ) : null}
             </span>
           </div>
           {row.device ? (
@@ -1064,6 +1080,7 @@ function DeviceSheet({
 
         <SameDevice row={row} all={all} onMerged={onClose} />
         {!row.saved || typeOf(row) === "unknown" ? <IdentifyHelp row={row} /> : null}
+        {res ? <ResourcesSection r={res} /> : null}
         <SmartSection row={row} />
         {row.machine ? <MachineSection m={row.machine} /> : null}
         {row.vpin ? <PinballSection row={row} v={row.vpin} /> : null}

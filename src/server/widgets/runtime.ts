@@ -51,7 +51,7 @@ export interface HubDeps {
   pinball?: (device?: string) => PinballWidgetData;
   /** The AI servers' computers (the device monitor asks the servers that list them). */
   machines?: () => { server: string; list: AiMachine[] }[];
-  /** The device monitor's data for Hearth sources: devices, network, smarthome. */
+  /** The device monitor's data for Hearth sources: devices, network, smarthome, resources. */
   hearth?: (what: HearthWhat) => unknown;
   /**
    * A system connected in Settings, with its sign-in, for connection sources (the headers stay on
@@ -167,7 +167,7 @@ export class CustomRunner {
   private startSource(s: Source) {
     if (s.kind === "hearth") {
       this.set(s, hearthData(s.what, this.deps), true);
-      if (s.what === "time" || s.what === "host") {
+      if (s.what === "time" || s.what === "host" || s.what === "resources" || s.what === "energy") {
         const tick = () => {
           if (this.stopped) return;
           this.set(s, hearthData(s.what, this.deps), true);
@@ -476,7 +476,13 @@ function hearthData(what: HearthWhat, deps: HubDeps): unknown {
       busy: list.filter((m) => m.busy).length,
     };
   }
-  if (what === "devices" || what === "network" || what === "smarthome")
+  if (
+    what === "devices" ||
+    what === "network" ||
+    what === "smarthome" ||
+    what === "resources" ||
+    what === "energy"
+  )
     return deps.hearth?.(what) ?? null;
   if (what === "time") {
     const d = new Date((deps.now ?? Date.now)());
@@ -671,6 +677,11 @@ export class WidgetHub {
 
   aiChanged(): void {
     this.refreshBuiltins("ai");
+    for (const { runner } of this.runners.values()) runner.hearthChanged();
+  }
+
+  /** New readings of the router and the NAS. */
+  resourcesChanged(): void {
     for (const { runner } of this.runners.values()) runner.hearthChanged();
   }
 

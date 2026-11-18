@@ -3,6 +3,7 @@
  * effect, what changes next, today's activity), what needs a look (sites their devices were
  * blocked from), and each child's own page with their activity by day and device, and their rules.
  */
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import {
@@ -36,6 +37,7 @@ import type {
 } from "../../shared/internet";
 import { type Act, RulesEditor } from "../components/family/RulesEditor";
 import { hereKey } from "../components/internet/HereBanner";
+import { NotificationsCard } from "../components/NotificationsCard";
 import { Avatar } from "../components/Picker";
 import { Button, ErrorNote, Modal, Segmented, useToast } from "../components/ui";
 import { api } from "../lib/api";
@@ -387,6 +389,7 @@ export function FamilyPage() {
           No children yet. The admin gives someone the child role in Settings → People.
         </p>
       )}
+      <NotificationsCard admin={Boolean(v.admin)} />
     </main>
   );
 }

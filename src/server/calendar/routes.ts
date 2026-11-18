@@ -55,6 +55,8 @@ export function calendarRoutes(app: Hono, d: CalendarRouteDeps): void {
     const to = Date.parse(c.req.query("to") ?? "");
     if (!Number.isFinite(from) || !Number.isFinite(to))
       throw new CalendarError("Say which days: ?from=…&to=… (ISO dates).");
+    // A phone may keep it for when it's away from home, unless the page has a PIN.
+    if (!d.who(c).admin && !d.hasPin(p.id)) c.header("X-Hearth-Offline", "keep");
     return c.json(await d.service.view(p, from, to, d.hasPin(p.id)));
   });
 

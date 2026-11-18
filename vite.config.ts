@@ -21,6 +21,7 @@ export default defineConfig({
     // changeOrigin stays false so Hearth sees the name the browser used (its same-site check).
     proxy: {
       "/api/live": { target: server, ws: true, changeOrigin: false },
+      "/manifest.webmanifest": { target: server, changeOrigin: false },
       "/api/": { target: server, changeOrigin: false },
       "/icons/": { target: server, changeOrigin: false },
       "/media/": { target: server, changeOrigin: false },

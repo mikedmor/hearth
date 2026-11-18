@@ -10,6 +10,8 @@ type Changed = Extract<LiveServerMessage, { type: "changed" }>["what"];
 
 type Listener = () => void;
 
+const KEPT_WIDGETS = "hearth:kept-widgets";
+
 class LiveStore {
   status: StatusMap = {};
   widgets = new Map<string, WidgetUpdate>();
@@ -21,6 +23,51 @@ class LiveStore {
   private timer: number | undefined;
   private onChanged = new Set<(what: Changed) => void>();
   private version = 0;
+  /** This page may keep its widgets' last data for when the phone is away from home. */
+  private keep = false;
+  private saveTimer: number | undefined;
+  /** When the widgets on screen were saved, if they're a kept copy. */
+  keptAt: number | null = null;
+
+  /** Whether this page may be kept (no PIN, not the admin). Off forgets what was kept. */
+  setKeep(on: boolean): void {
+    this.keep = on;
+    if (!on) {
+      try {
+        localStorage.removeItem(KEPT_WIDGETS);
+      } catch {}
+      return;
+    }
+    if (!this.connected) this.restore();
+  }
+
+  private save() {
+    if (!this.keep || this.saveTimer) return;
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = undefined;
+      try {
+        localStorage.setItem(
+          KEPT_WIDGETS,
+          JSON.stringify({ at: Date.now(), widgets: [...this.widgets.values()] }),
+        );
+      } catch {}
+    }, 5000);
+  }
+
+  /** Home can't be reached: show the widgets as they were last time, if nothing's on screen. */
+  private restore() {
+    if (this.widgets.size || !this.keep) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEPT_WIDGETS) ?? "null") as {
+        at: number;
+        widgets: WidgetUpdate[];
+      } | null;
+      if (!raw?.widgets?.length) return;
+      for (const w of raw.widgets) this.widgets.set(w.id, w);
+      this.keptAt = raw.at;
+      this.emit();
+    } catch {}
+  }
 
   subscribe = (fn: Listener) => {
     this.listeners.add(fn);
@@ -93,6 +140,11 @@ class LiveStore {
     ws.onopen = () => {
       this.retry = 0;
       this.connected = true;
+      if (this.keptAt) {
+        // Home again: what comes next is live.
+        this.keptAt = null;
+        this.widgets.clear();
+      }
       this.send({ type: "watch", widgets: this.watching });
       this.emit();
     };
@@ -104,13 +156,16 @@ class LiveStore {
         return;
       }
       if (m.type === "status") this.status = m.data;
-      else if (m.type === "widget") this.widgets.set(m.update.id, m.update);
-      else if (m.type === "changed") for (const fn of this.onChanged) fn(m.what);
+      else if (m.type === "widget") {
+        this.widgets.set(m.update.id, m.update);
+        this.save();
+      } else if (m.type === "changed") for (const fn of this.onChanged) fn(m.what);
       this.emit();
     };
     ws.onclose = () => {
       this.connected = false;
       this.ws = null;
+      this.restore();
       this.emit();
       void this.pollStatus();
       const wait = Math.min(30_000, 1000 * 2 ** this.retry++);

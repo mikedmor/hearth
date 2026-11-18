@@ -17,7 +17,8 @@ export const SECRET_NAME = /^[a-z0-9][a-z0-9_:.-]{0,63}$/;
  * (Google's client is the admin's); the front door's house password and the sign-on client's
  * secret are only for those.
  */
-const PERSONAL = /^(calendar:(?!google-client$)|door:|sso:|smarthome:|router:|files:)/;
+const PERSONAL =
+  /^(calendar:(?!google-client$)|door:|sso:|smarthome:|router:|files:|nas:|machine:|sense:|push:)/;
 export const isPersonalSecret = (name: string) => PERSONAL.test(name);
 
 export async function loadMasterKey(

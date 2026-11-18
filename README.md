@@ -161,11 +161,12 @@ The full documentation lives in **[guides/](guides/README.md)**.
 | [Getting started](guides/getting-started.md) | [Calendar](guides/calendar.md)         | [Family and internet controls](guides/internet.md) |
 | [Signing in](guides/sign-in.md)              | [Files](guides/files.md)               | [AI](guides/ai.md)                           |
 | [Finding services](guides/finding-services.md) | [The trust page](guides/trust.md)    | [Troubleshooting and FAQ](guides/troubleshooting.md) |
+|                                              | [On your phone](guides/phone.md)       |                                              |
 
 ## Privacy and security
 
 - **Made for your home network.** Hearth is a start page for the people behind your router, never the open internet. Don't port-forward it.
-- **Nothing leaves without your say.** Widgets reach the internet, calendars reach Google, and the update check asks GitHub only once the admin allows each one, and every outbound call is listed in [SECURITY.md](SECURITY.md). A web search goes from your browser straight to the search engine, never through Hearth.
+- **Nothing leaves without your say.** Widgets reach the internet, calendars reach Google, the Sense energy monitor reaches Sense, notifications go through your phone browser's push service, and the update check asks GitHub only once the admin allows each one, and every outbound call is listed in [SECURITY.md](SECURITY.md). A web search goes from your browser straight to the search engine, never through Hearth.
 - **Encrypted secrets.** Widget keys, AI keys, calendar and NAS sign-ins are encrypted at rest (AES-256-GCM) with your `HEARTH_SECRET_KEY`. Nothing private ever appears on the page for visitors.
 - **Each person as themselves.** Files browses the NAS with each person's own NAS account, so Hearth never shows anyone more than the NAS would.
 

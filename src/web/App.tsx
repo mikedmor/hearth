@@ -24,6 +24,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PublicProfile } from "../shared/api";
 import { AdminSignIn } from "./components/AdminSignIn";
+import { AppBanner } from "./components/AppBanner";
 import { FamilyAlerts, HereBanner } from "./components/internet/HereBanner";
 import { Avatar, NOT_OWNER, Picker } from "./components/Picker";
 import { TrustNudge } from "./components/TrustNudge";
@@ -32,6 +33,7 @@ import { api, local } from "./lib/api";
 import { cx } from "./lib/format";
 import { live } from "./lib/live";
 import { applyLook } from "./lib/look";
+import { setBadge } from "./lib/pwa";
 import { useHome, useLiveRefresh, useRefresh } from "./lib/queries";
 import { useReportTrust } from "./lib/trust";
 import { CalendarPage } from "./pages/CalendarPage";
@@ -58,6 +60,14 @@ function Shell() {
   useEffect(() => {
     if (who !== undefined) live.reconnectAs(who);
   }, [who]);
+  // Keep widgets' last data for away from home only on pages that may be kept.
+  const keepable = home.data?.offline;
+  useEffect(() => {
+    if (keepable !== undefined) live.setKeep(keepable);
+  }, [keepable]);
+  // Family requests waiting, as a number on the app's icon.
+  const waiting = home.data?.familyPending;
+  useEffect(() => setBadge(waiting), [waiting]);
   const [picker, setPicker] = useState(false);
   const [startWith, setStartWith] = useState<PublicProfile | undefined>(undefined);
   const toast = useToast();
@@ -194,7 +204,8 @@ function Shell() {
       <div className="backdrop" />
       <header
         className={cx(
-          "shell flex items-center justify-between gap-3 pt-[max(14px,env(safe-area-inset-top))] pb-2",
+          // On a phone the pages get their own row, so the bar never runs wider than the screen.
+          "shell flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-[max(14px,env(safe-area-inset-top))] pb-2 md:flex-nowrap",
           (path === "/" || path === "/setup") && view.look.layout === "command" && "command-head",
         )}
       >
@@ -209,7 +220,7 @@ function Shell() {
         {nav.length > 1 ? (
           <nav
             aria-label="Pages"
-            className="flex items-center gap-0.5 rounded-full border border-line bg-[color-mix(in_oklab,var(--c-surface)_70%,transparent)] p-1 backdrop-blur"
+            className="order-last flex w-full min-w-0 items-center gap-0.5 overflow-x-auto rounded-full border border-line bg-[color-mix(in_oklab,var(--c-surface)_70%,transparent)] p-1 backdrop-blur [scrollbar-width:none] md:order-none md:w-auto"
           >
             {nav.map((n) => {
               const active = n.to === "/" ? path === "/" : path.startsWith(n.to);
@@ -226,12 +237,12 @@ function Shell() {
                   }
                   title={n.note ?? n.label}
                   className={cx(
-                    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold transition",
+                    "flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold whitespace-nowrap transition md:flex-none",
                     active ? "bg-accent text-white" : "text-muted hover:text-ink",
                   )}
                 >
                   <n.icon className="size-4" aria-hidden />
-                  <span className="hidden md:inline">{n.label}</span>
+                  <span className="hidden xl:inline">{n.label}</span>
                   {n.badge ? (
                     <span
                       aria-hidden
@@ -304,6 +315,7 @@ function Shell() {
         </div>
       </header>
       <TrustNudge />
+      <AppBanner />
       <HereBanner />
       <FamilyAlerts pending={view.familyPending} />
       <Outlet />

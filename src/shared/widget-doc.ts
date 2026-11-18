@@ -76,6 +76,8 @@ export const HEARTH_WHATS = [
   "machines",
   "pinball",
   "smarthome",
+  "resources",
+  "energy",
 ] as const;
 export type HearthWhat = (typeof HEARTH_WHATS)[number];
 
@@ -85,7 +87,8 @@ export const HearthSource = z.object({
   /**
    * status: every tile's up/down; ai: the AI servers; time: the clock; host: Hearth's machine;
    * devices: the saved devices; network: the router's map; machines: the AI servers' computers;
-   * pinball: the table; smarthome: the hubs' readings.
+   * pinball: the table; smarthome: the hubs' readings; resources: the router's and the NAS's
+   * processor, memory, temperature, storage and traffic.
    */
   what: z.enum(HEARTH_WHATS),
 });
@@ -437,7 +440,9 @@ export function checkDoc(input: unknown): { doc: WidgetDoc | null; issues: DocIs
   });
   doc.blocks.forEach((b, i) => {
     const rec = b as Record<string, unknown>;
-    for (const k of FORMULA_KEYS) tryFormula(`blocks.${i}.${k}`, rec[k]);
+    // A bars block's value is a field name in each item, not a formula.
+    for (const k of FORMULA_KEYS)
+      if (!(b.kind === "bars" && k === "value")) tryFormula(`blocks.${i}.${k}`, rec[k]);
     for (const k of TEMPLATE_KEYS) tryTemplate(`blocks.${i}.${k}`, rec[k]);
     if (typeof rec.max === "string") tryFormula(`blocks.${i}.max`, rec.max);
     if (b.tone && !(TONES as readonly string[]).includes(b.tone))

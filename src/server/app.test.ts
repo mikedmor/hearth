@@ -18,6 +18,7 @@ import { DeviceService } from "./devices/service";
 import { DeviceStore } from "./devices/store";
 import { InternetService } from "./internet/service";
 import { HistoryStore, InternetStore } from "./internet/store";
+import { PushService } from "./push";
 import { SecretStore } from "./secrets";
 import { Sso } from "./sso";
 import { fixtureInput } from "./test-fixtures";
@@ -82,6 +83,16 @@ async function makeApp(opts: { built?: boolean; sso?: Sso } = { built: true }) {
     reach: async () => false,
     scan: async () => [],
   });
+  const pushed: string[] = [];
+  const push = new PushService({
+    dataDir: dir,
+    secrets,
+    allowed: () => true,
+    fetch: (async (url: string) => {
+      pushed.push(url);
+      return new Response(null, { status: 201 });
+    }) as unknown as typeof fetch,
+  });
   const app = createApp({
     config,
     auth,
@@ -92,6 +103,7 @@ async function makeApp(opts: { built?: boolean; sso?: Sso } = { built: true }) {
     devices,
     monitor,
     internet,
+    push,
     sso: opts.sso,
     status,
     dataDir: dir,
@@ -127,7 +139,7 @@ async function makeApp(opts: { built?: boolean; sso?: Sso } = { built: true }) {
         .status,
     ).toBe(200);
   };
-  return { app, req, jar, auth, config, secrets, signInAdmin, deviceStore };
+  return { app, req, jar, auth, config, secrets, signInAdmin, deviceStore, pushed };
 }
 
 const home = async (req: Awaited<ReturnType<typeof makeApp>>["req"]) =>
@@ -1194,6 +1206,69 @@ describe("services added by hand", () => {
       items: { app: string }[];
     };
     expect(after.items.some((i) => i.app === "prusalink")).toBe(false);
+  });
+});
+
+describe("on a phone", () => {
+  it("has a manifest to install from, and the app's icons and service worker", async () => {
+    const { req } = await makeApp();
+    const res = await req("GET", "/manifest.webmanifest");
+    expect(res.headers.get("content-type")).toContain("application/manifest+json");
+    const m = (await res.json()) as {
+      name: string;
+      display: string;
+      icons: { sizes: string; purpose?: string }[];
+    };
+    expect(m.display).toBe("standalone");
+    expect(m.icons.map((i) => i.sizes)).toContain("512x512");
+    expect(m.icons.some((i) => i.purpose === "maskable")).toBe(true);
+  });
+
+  it("lets a phone keep a guest's page for away from home, never the admin's", async () => {
+    const { req, signInAdmin } = await makeApp();
+    let res = await req("GET", "/api/home");
+    expect(res.headers.get("x-hearth-offline")).toBe("keep");
+    expect(((await res.json()) as HomeView).offline).toBe(true);
+    expect((await req("GET", "/api/status")).headers.get("x-hearth-offline")).toBe("keep");
+    await signInAdmin();
+    res = await req("GET", "/api/home");
+    expect(res.headers.get("x-hearth-offline")).toBeNull();
+    expect(((await res.json()) as HomeView).offline).toBe(false);
+    expect((await req("GET", "/api/status")).headers.get("x-hearth-offline")).toBeNull();
+  });
+
+  it("lets only parents and the admin turn notifications on, and tests them", async () => {
+    const { req, signInAdmin, pushed } = await makeApp();
+    const sub = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      keys: {
+        p256dh:
+          "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
+        auth: "tBHItJI5svbpez7KI4CCXg",
+      },
+    };
+    expect((await req("GET", "/api/push/key")).status).toBe(403);
+    expect((await req("POST", "/api/push/subscribe", { subscription: sub })).status).toBe(403);
+    await signInAdmin();
+    const { key } = (await (await req("GET", "/api/push/key")).json()) as { key: string };
+    expect(key.length).toBeGreaterThan(80);
+    expect(
+      (await req("POST", "/api/push/subscribe", { subscription: sub, label: "Chrome on Android" }))
+        .status,
+    ).toBe(200);
+    expect(await (await req("POST", "/api/push/state", { endpoint: sub.endpoint })).json()).toEqual(
+      { on: true },
+    );
+    expect((await req("POST", "/api/push/test", { endpoint: sub.endpoint })).status).toBe(200);
+    expect(pushed).toEqual([sub.endpoint]);
+    const list = (await (await req("GET", "/api/admin/push")).json()) as {
+      devices: { id: string; who: string; label: string }[];
+    };
+    expect(list.devices).toMatchObject([{ who: "The admin", label: "Chrome on Android" }]);
+    expect((await req("DELETE", `/api/admin/push/${list.devices[0]?.id}`)).status).toBe(200);
+    expect(await (await req("POST", "/api/push/state", { endpoint: sub.endpoint })).json()).toEqual(
+      { on: false },
+    );
   });
 });
 

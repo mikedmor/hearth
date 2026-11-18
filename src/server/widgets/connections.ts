@@ -47,6 +47,16 @@ export const HEARTH_DATA: { what: HearthWhat; name: string; hint: string }[] = [
     name: "Smart home",
     hint: "Readings and switches from openHAB or Home Assistant",
   },
+  {
+    what: "resources",
+    name: "Router, NAS and machines",
+    hint: "Their processor, memory, temperature, disks and traffic",
+  },
+  {
+    what: "energy",
+    name: "Sense energy",
+    hint: "The home's power now, today's use, and what's on",
+  },
   { what: "host", name: "This server", hint: "Hearth's machine: load, memory and disk" },
   { what: "time", name: "The time", hint: "Now, the hour, the weekday" },
 ];

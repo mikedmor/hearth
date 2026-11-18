@@ -104,6 +104,100 @@ export interface RouterMap {
   clients: RouterClient[];
 }
 
+export interface RouterStatus {
+  model?: string;
+  version?: string;
+  cores?: number;
+  load?: [number, number, number];
+  /** Bytes. */
+  memTotal?: number;
+  memUsed?: number;
+  /** The processor's, °C. */
+  temp?: number;
+  uptime?: number;
+  /** Its own storage, bytes. */
+  flashTotal?: number;
+  flashUsed?: number;
+  internet?: boolean;
+  /** Bytes a second, summed over its online clients. */
+  rx: number;
+  tx: number;
+}
+
+const num = (v: unknown): number | undefined => {
+  const n = typeof v === "string" ? Number(v) : v;
+  return typeof n === "number" && Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * Sizes the router reports in kilobytes (most firmware) or bytes: a router has more than 16 MiB of
+ * memory and storage, so a smaller number must be kilobytes.
+ */
+const size = (v: unknown): number | undefined => {
+  const n = num(v);
+  if (n === undefined || n < 0) return undefined;
+  return n < 1 << 24 ? n * 1024 : n;
+};
+
+/** `system get_status` (and the client list, and `get_info`) into plain numbers. */
+export function parseStatus(
+  st: Record<string, unknown> | null,
+  list: { clients?: unknown } | null,
+  info: Record<string, unknown> | null,
+): RouterStatus {
+  if (!st || typeof st !== "object") throw new RouterError("The router didn't say how it's doing.");
+  const sys = (st.system ?? {}) as Record<string, unknown>;
+  const la = Array.isArray(sys.load_average) ? sys.load_average.map(num) : [];
+  const load =
+    la.length >= 3 && la.every((x) => x !== undefined)
+      ? ([la[0], la[1], la[2]] as [number, number, number])
+      : undefined;
+  const memTotal = size(sys.memory_total);
+  const free = size(sys.memory_free);
+  const cache = size(sys.memory_buff_cache) ?? 0;
+  const memUsed =
+    memTotal !== undefined && free !== undefined ? Math.max(0, memTotal - free - cache) : undefined;
+  const flashTotal = size(sys.flash_total);
+  const flashFree = size(sys.flash_free);
+  const cpu = (sys.cpu ?? {}) as Record<string, unknown>;
+  const temp = num(cpu.temperature) ?? num(sys.temperature);
+  const nets = Array.isArray(st.network) ? (st.network as Record<string, unknown>[]) : [];
+  const wans = nets.filter((n) =>
+    /^(wan|wwan|tethering|modem|secondwan)/i.test(String(n.interface)),
+  );
+  const internet = wans.length ? wans.some((n) => n.online === true) : undefined;
+  const raw = list?.clients;
+  const clients = (
+    Array.isArray(raw) ? raw : raw && typeof raw === "object" ? Object.values(raw) : []
+  ) as Record<string, unknown>[];
+  let rx = 0;
+  let tx = 0;
+  for (const c of clients) {
+    if (c?.online !== true) continue;
+    rx += num(c.rx) ?? 0;
+    tx += num(c.tx) ?? 0;
+  }
+  return {
+    model: text(info?.model, 40),
+    version: text(info?.firmware_version, 40),
+    cores: num(info?.cpu_num) ?? num(info?.cpu_count),
+    load,
+    memTotal,
+    memUsed,
+    temp,
+    uptime: num(sys.uptime),
+    flashTotal,
+    flashUsed:
+      flashTotal !== undefined && flashFree !== undefined
+        ? Math.max(0, flashTotal - flashFree)
+        : undefined,
+    internet,
+    // Clients' rx is what they receive: what the router sends them (downloads).
+    rx,
+    tx,
+  };
+}
+
 const mac = (v: unknown) =>
   typeof v === "string" && /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(v)
     ? v.toLowerCase().replace(/-/g, ":")
@@ -215,6 +309,28 @@ export class GlInet {
       } else if (!this.sid) await this.signIn();
       return this.rpc("call", [this.sid, object, method, {}]);
     }
+  }
+
+  private info: Record<string, unknown> | null = null;
+
+  /**
+   * How the router itself is doing (`system get_status`, and `system get_info` once for its model):
+   * load, memory, temperature, storage, uptime, whether the internet is up, and the traffic its
+   * clients move now.
+   */
+  async status(): Promise<RouterStatus> {
+    const [st, list, info] = await Promise.all([
+      this.call("system", "get_status") as Promise<Record<string, unknown> | null>,
+      this.call("clients", "get_list").catch(() => null) as Promise<{ clients?: unknown } | null>,
+      this.info
+        ? Promise.resolve(this.info)
+        : (this.call("system", "get_info").catch(() => null) as Promise<Record<
+            string,
+            unknown
+          > | null>),
+    ]);
+    if (info) this.info = info;
+    return parseStatus(st, list, info);
   }
 
   /** Who's connected to what, and every client's address and state. */
